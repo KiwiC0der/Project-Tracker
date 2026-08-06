@@ -18,6 +18,33 @@ A project and task tracker — WebGL prism hero, real accounts, and a drag-and-d
 - ♿ Keyboard-operable, `inert` on the collapsed sidebar, labelled form fields
 - 🐢 Honours `prefers-reduced-motion`; the shaders idle when the tab is hidden
 
+## Design exploration
+
+Nine complete redesign directions live in [`public/explorations/`](./public/explorations/) —
+runnable prototypes, not mockups. All nine share one engine
+([`_kernel.js`](./public/explorations/_kernel.js)), so they differ only in design.
+
+```bash
+npx serve .          # then open /explorations/
+```
+
+| | Direction | Bets on |
+|---|---|---|
+| 01 | **TERMINAL** | Keyboard is the whole interface; the board renders as text |
+| 02 | **ORBIT** | Physics carries the information — urgency is orbital distance |
+| 03 | **BROADSHEET** | Editorial hierarchy beats widget scanning |
+| 04 | **WORKBENCH** | Adjacency — board, Gantt and graph live at once |
+| 05 | **PULSE** | Ambient state you feel before you read |
+| 06 | **PRESS ROOM** | Broadsheet × Workbench — floating paper sheets, free geometry |
+| 07 | **COMPOSITOR** | Broadsheet × Workbench — panes tiled into a page, nothing overlaps |
+| 08 | **COMPOSING ROOM** | Both, on a radio — loose sheets or a locked page, switched losslessly |
+| 09 | **DASHBOARD** | The production candidate — that board inside the real app's sidebar and views |
+
+Background reading: [`docs/TEARDOWN.md`](./docs/TEARDOWN.md) audits what is here
+today; [`docs/FEATURE-VAULT.md`](./docs/FEATURE-VAULT.md) catalogues the
+capabilities the kernel adds — momentum, landing-date forecasts, staleness
+decay, time travel, and an auditable "do this next".
+
 ## Tech Stack
 
 - React 18 + TypeScript

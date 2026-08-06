@@ -1,0 +1,1698 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>PULSE — Project Tracker Lab</title>
+<style>
+/* ==========================================================================
+   PULSE — the tracker as a living organism.
+   Tokens first. Nothing below this block should contain a raw hex value
+   except inside the GLSL string (which CSS can't reach anyway).
+   ========================================================================== */
+:root{
+  /* substrate */
+  --bg:            #060a09;
+  --bg-veil:       rgba(8,14,12,.90);
+
+  /* living palette — each one maps to a signal, not a mood */
+  --health:        #34d399;   /* progress, warmth        */
+  --flow:          #22d3ee;   /* momentum, motion        */
+  --attn:          #fbbf24;   /* deadline pressure       */
+  --distress:      #fb7185;   /* overdue, decay          */
+  --slate:         #4d6b66;   /* neglect: colour drained */
+
+  /* ink — all three tested >= 6:1 on --bg */
+  --ink:           #e6f6f0;
+  --ink-2:         #a8c8bf;
+  --ink-3:         #7b9a92;
+
+  --gut:           clamp(1.15rem, 3.2vw, 2.75rem);
+  --rad:           1.35rem;
+
+  --dur:           900ms;
+  --dur-mid:       520ms;
+  --dur-fast:      240ms;
+  --ease:          cubic-bezier(.16,.84,.24,1);
+
+  /* driven from JS — the CSS fallback field reads these when WebGL is out */
+  --f-health: .16; --f-flow: .10; --f-press: .04; --f-stale: 0;
+
+  --surface:  rgba(255,255,255,.045);
+  --surface-2:rgba(255,255,255,.085);
+  --ring:     0 0 0 2px rgba(34,211,238,.85), 0 0 24px rgba(34,211,238,.30);
+}
+
+/* Motion budget: one switch, honoured everywhere. JS reads the same query. */
+@media (prefers-reduced-motion: reduce){
+  :root{ --dur: 1ms; --dur-mid: 1ms; --dur-fast: 1ms; }
+}
+
+*,*::before,*::after{ box-sizing:border-box }
+html,body{ height:100% }
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-weight:350; font-size:clamp(.92rem,.55vw + .78rem,1rem); line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;                 /* the stage scrolls, never the document */
+  overscroll-behavior:none;
+}
+h1,h2,h3,p,ul,ol,figure,table{ margin:0; padding:0 }
+ul,ol{ list-style:none }
+button,input{ font:inherit; color:inherit }
+a{ color:inherit }
+
+:focus-visible{ outline:none; box-shadow:var(--ring); border-radius:.7rem }
+.sr-only{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+}
+
+/* ---------- the field ---------------------------------------------------- */
+.field{ position:fixed; inset:0; z-index:0; pointer-events:none; contain:strict }
+.field canvas{ position:absolute; inset:0; width:100%; height:100%; display:block }
+#cells{ transition:opacity var(--dur) var(--ease) }
+.engaged #cells{ opacity:.55 }
+.focusing #cells{ opacity:.10 }
+
+/* WebGL-less fallback: same four signals, expressed as stacked radial washes */
+.fallfield{ display:none; position:absolute; inset:0;
+  background:
+    radial-gradient(68% 60% at 28% 32%, rgba(52,211,153,var(--f-health)), transparent 72%),
+    radial-gradient(58% 58% at 76% 66%, rgba(34,211,238,var(--f-flow)),   transparent 72%),
+    radial-gradient(85% 70% at 58% 92%, rgba(251,113,133,var(--f-press)), transparent 72%),
+    var(--bg);
+  filter:saturate(calc(1 - var(--f-stale) * .55));
+}
+.nogl .fallfield{ display:block }
+.nogl #gl{ display:none }
+
+/* ---------- cell hit targets (real buttons, layered over the canvas) ------ */
+.cellhits{ position:fixed; inset:0; z-index:1; pointer-events:none }
+.cellhit{
+  position:absolute; left:0; top:0; margin:0; padding:0;
+  border:0; border-radius:50%; background:transparent; cursor:pointer;
+  pointer-events:auto; will-change:transform;
+}
+.cellhit:focus-visible{ box-shadow:var(--ring) }
+
+/* ---------- stage -------------------------------------------------------- */
+.stage{
+  position:fixed; inset:0; z-index:2;
+  overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
+  padding:var(--gut) var(--gut) 6rem;
+  display:grid; align-content:start;
+  gap:clamp(1.4rem,2.6vw,2.6rem);
+  grid-template-columns:minmax(0,1fr);
+  pointer-events:none;                       /* ambient: the UI is not there */
+}
+.engaged .stage{ pointer-events:auto }
+@media (min-width:64rem){
+  .stage{ grid-template-columns:minmax(14rem,20rem) minmax(0,1.4fr) minmax(16rem,23rem) }
+}
+.col{ display:grid; gap:clamp(1.1rem,2vw,1.9rem); align-content:start; min-width:0 }
+
+/* Panels fade up as one choreographed wave; the head does not — it *moves*. */
+.panel{
+  position:relative; min-width:0;
+  padding:clamp(1rem,1.8vw,1.6rem) clamp(1rem,1.8vw,1.5rem);
+  opacity:0; transform:translate3d(0,20px,0);
+  transition:opacity var(--dur-mid) var(--ease), transform var(--dur-mid) var(--ease);
+}
+/* soft-edged backdrop — a wash, never a card with a border */
+.panel::before{
+  content:''; position:absolute; inset:-.9rem -1.1rem; z-index:-1; pointer-events:none;
+  background:radial-gradient(ellipse 100% 100% at 50% 45%,
+    var(--bg-veil) 0%, rgba(8,14,12,.80) 58%, rgba(6,10,9,0) 100%);
+}
+.engaged .panel{ opacity:1; transform:none }
+.engaged .col:nth-child(1) .panel{ transition-delay:60ms }
+.engaged .col:nth-child(2) .panel{ transition-delay:130ms }
+.engaged .col:nth-child(3) .panel{ transition-delay:200ms }
+.focusing .panel{ opacity:0; transform:translate3d(0,10px,0); transition-delay:0ms !important }
+
+/* ---------- head: the one thing ambient mode shows ----------------------- */
+.head{
+  grid-column:1 / -1; position:relative; z-index:3;
+  transform-origin:0 0; transform:var(--head-t, none);
+  transition:transform var(--dur) var(--ease);
+  will-change:transform; max-width:min(100%, 34rem);
+}
+/* The field is genuinely bright where health is high, and light-on-light was
+   failing contrast badly in ambient. This scrim rides the head's own FLIP
+   transform, so it scales with the text instead of needing its own animation.
+   It is only wanted in ambient — engaged already has opaque panels. */
+.head::before{
+  content:''; position:absolute; z-index:-1;
+  inset:-2.2em -3.4em -2.6em -3em;
+  background:radial-gradient(60% 58% at 34% 46%,
+    rgba(3,8,7,.86) 0%, rgba(3,8,7,.68) 42%, rgba(3,8,7,.28) 72%, transparent 100%);
+  opacity:1; transition:opacity var(--dur) var(--ease);
+  pointer-events:none;
+}
+.engaged .head::before{ opacity:0 }
+.engaged .head{ --head-t:translate(0px,0px) scale(1) }
+.focusing .head{ opacity:0; transition:transform var(--dur) var(--ease), opacity var(--dur-fast) linear }
+.bignum{
+  font-size:clamp(2.4rem,4.6vw,3.6rem); font-weight:200; line-height:.9;
+  letter-spacing:-.045em; color:#f4fbf8;
+  text-shadow:
+    0 1px 14px rgba(2,8,6,.9),
+    0 0 .8em rgba(52,211,153,.28), 0 0 2.4em rgba(34,211,238,.14);
+}
+.bignum span{ display:inline-block; will-change:transform }
+.headcap{
+  font-size:.62rem; letter-spacing:.34em; text-transform:uppercase;
+  color:#b9c9c4; margin-top:.55rem;
+  text-shadow:0 1px 10px rgba(2,8,6,.9);
+}
+.verdict{
+  margin-top:.7rem; color:#dbe9e4; font-weight:300;
+  font-size:1.02rem; line-height:1.45; letter-spacing:.005em; text-wrap:balance;
+  text-shadow:0 1px 12px rgba(2,8,6,.95), 0 0 30px rgba(2,8,6,.7);
+}
+.hint{
+  margin-top:1.1rem; font-size:.7rem; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--ink-3); opacity:1; transition:opacity var(--dur-mid) var(--ease);
+}
+.engaged .hint{ opacity:0 }
+
+/* ---------- shared bits -------------------------------------------------- */
+.k{
+  font-size:.6rem; letter-spacing:.34em; text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:.75rem;
+}
+.pill{
+  border:0; border-radius:999px; background:var(--surface); color:var(--ink-2);
+  padding:.42rem .85rem; font-size:.72rem; letter-spacing:.12em; text-transform:uppercase;
+  cursor:pointer; transition:background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.pill:hover{ background:var(--surface-2); color:var(--ink) }
+.pill[aria-pressed="true"]{ background:rgba(34,211,238,.16); color:var(--flow) }
+.muted{ color:var(--ink-3) }
+.num{ font-variant-numeric:tabular-nums }
+
+/* ---------- projects ----------------------------------------------------- */
+.projlist{ display:grid; gap:.35rem }
+.proj{
+  display:grid; grid-template-columns:1.4rem minmax(0,1fr); gap:.15rem .7rem;
+  align-items:baseline; width:100%; text-align:left;
+  border:0; background:transparent; cursor:pointer; padding:.6rem .7rem;
+  border-radius:var(--rad); transition:background var(--dur-fast) ease;
+}
+.proj:hover{ background:var(--surface) }
+.proj[aria-pressed="true"]{ background:var(--surface-2) }
+.proj .glyph{ grid-row:1 / span 3; font-size:1rem; line-height:1.2; align-self:center }
+.proj .pname{ color:var(--ink); font-size:.95rem; letter-spacing:.01em }
+.proj[aria-pressed="true"] .pname{ color:var(--ink) }
+.meter{
+  grid-column:2; height:3px; border-radius:999px; background:rgba(255,255,255,.08);
+  overflow:hidden; margin:.42rem 0 .3rem;
+}
+.meter i{
+  display:block; height:100%; border-radius:999px; background:var(--c,var(--health));
+  transform-origin:0 50%; transform:scaleX(var(--v,0));
+  transition:transform var(--dur-mid) var(--ease);
+  box-shadow:0 0 12px var(--c,var(--health));
+}
+.pmeta{ grid-column:2; font-size:.7rem; color:var(--ink-3); letter-spacing:.06em }
+
+.footrow{ display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin-top:1rem }
+
+/* ---------- quick add ---------------------------------------------------- */
+.qa{ display:flex; gap:.5rem; align-items:center; flex-wrap:wrap }
+.qa input{
+  flex:1 1 12rem; min-width:0; border:0; border-radius:999px;
+  background:var(--surface); padding:.72rem 1.05rem; color:var(--ink);
+  transition:background var(--dur-fast) ease;
+}
+.qa input::placeholder{ color:var(--ink-3) }
+.qa input:hover{ background:var(--surface-2) }
+.syntax{ margin-top:.6rem; font-size:.7rem; color:var(--ink-3); letter-spacing:.04em }
+.syntax b{ color:var(--ink-2); font-weight:400 }
+
+/* ---------- tasks -------------------------------------------------------- */
+.group{ margin-top:1.5rem }
+.group:first-of-type{ margin-top:1.1rem }
+.tasks{ display:grid; gap:.25rem }
+.task{
+  display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+  padding:.5rem .7rem; border-radius:var(--rad);
+  transition:background var(--dur-fast) ease;
+}
+.task:hover{ background:var(--surface) }
+.task.sel{ background:rgba(34,211,238,.10) }
+.tsel{
+  flex:1 1 12rem; min-width:0; display:grid; gap:.15rem; text-align:left;
+  border:0; background:transparent; cursor:pointer; padding:.15rem 0;
+}
+.ttitle{ color:var(--ink); font-weight:350; letter-spacing:.005em }
+.task.done .ttitle{ color:var(--ink-3) }
+.tmeta{ font-size:.7rem; color:var(--ink-3); letter-spacing:.05em }
+.tmeta .over{ color:var(--distress) }
+.tmeta .soon{ color:var(--attn) }
+.tmeta .hi{ color:var(--ink-2) }
+.tacts{ display:flex; gap:.3rem; align-items:center; flex:0 0 auto }
+.seg{ display:flex; gap:.15rem; background:rgba(255,255,255,.04); border-radius:999px; padding:.15rem }
+.seg button{
+  border:0; background:transparent; color:var(--ink-3); cursor:pointer;
+  border-radius:999px; padding:.3rem .55rem; font-size:.6rem;
+  letter-spacing:.14em; text-transform:uppercase;
+  transition:background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.seg button:hover{ color:var(--ink) }
+.seg button[aria-pressed="true"]{ background:rgba(255,255,255,.10); color:var(--ink) }
+.seg button[data-to="doing"][aria-pressed="true"]{ background:rgba(34,211,238,.18); color:var(--flow) }
+.seg button[data-to="done"][aria-pressed="true"]{ background:rgba(52,211,153,.18); color:var(--health) }
+.del{
+  border:0; background:transparent; color:var(--ink-3); cursor:pointer;
+  border-radius:999px; padding:.3rem .6rem; font-size:.75rem; letter-spacing:.08em;
+  transition:color var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.del:hover{ color:var(--distress); background:rgba(251,113,133,.12) }
+.del.arm{ color:var(--distress); background:rgba(251,113,133,.16); font-size:.62rem; text-transform:uppercase; letter-spacing:.14em }
+.empty{ color:var(--ink-3); font-size:.9rem; padding:.6rem .7rem; font-style:italic }
+
+/* ---------- momentum engine --------------------------------------------- */
+.eng{ display:grid; gap:1.9rem }
+.pace-num{ font-size:2.5rem; font-weight:200; letter-spacing:-.03em; line-height:1 }
+.pace-num em{ font-style:normal; font-size:.8rem; letter-spacing:.16em; color:var(--ink-3); margin-left:.4rem; text-transform:uppercase }
+.trend{ font-size:.78rem; letter-spacing:.1em; margin-top:.45rem; text-transform:uppercase }
+.trend.up{ color:var(--health) } .trend.down{ color:var(--distress) } .trend.flat{ color:var(--ink-2) }
+.spark{ width:100%; height:52px; margin:.9rem 0 .55rem; display:block; overflow:visible }
+.note{ font-size:.74rem; color:var(--ink-3); line-height:1.5 }
+
+.landline{ color:var(--ink-2); font-size:.95rem; margin-bottom:.9rem; text-wrap:balance }
+.landline b{ color:var(--health); font-weight:400 }
+.landwrap{ overflow-x:auto }
+.land{ width:100%; border-collapse:collapse; font-size:.78rem; table-layout:fixed }
+.land th{ text-align:left; font-weight:400; color:var(--ink-3); font-size:.6rem;
+  letter-spacing:.2em; text-transform:uppercase; padding:0 .4rem .5rem 0 }
+.land td{ padding:.34rem .4rem .34rem 0; color:var(--ink-2); vertical-align:top }
+.land td:first-child{ color:var(--ink) }
+.land td:last-child,.land th:last-child{ text-align:right; padding-right:0 }
+.land .nopace{ color:var(--ink-3); font-style:italic }
+
+.doit{ color:var(--ink); font-size:1.15rem; font-weight:300; line-height:1.35; text-wrap:balance }
+.doit-why{ color:var(--flow); font-size:.76rem; letter-spacing:.06em; margin-top:.5rem }
+.doit-proj{ color:var(--ink-3); font-size:.7rem; letter-spacing:.14em; text-transform:uppercase; margin-top:.35rem }
+.focusbtn{
+  margin-top:1rem; border:0; cursor:pointer; border-radius:999px;
+  padding:.7rem 1.5rem; font-size:.72rem; letter-spacing:.24em; text-transform:uppercase;
+  color:var(--bg); background:var(--flow);
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) ease;
+  box-shadow:0 0 28px rgba(34,211,238,.28);
+}
+.focusbtn:hover{ box-shadow:0 0 42px rgba(34,211,238,.5) }
+@media (prefers-reduced-motion:no-preference){ .focusbtn:active{ transform:scale(.97) } }
+
+/* ---------- focus mode --------------------------------------------------- */
+.focusveil{
+  position:fixed; inset:0; z-index:10; display:grid; place-items:center;
+  padding:var(--gut);
+  background:radial-gradient(ellipse 70% 60% at 50% 50%, rgba(6,10,9,.86), rgba(3,5,5,.97) 70%);
+  opacity:0; visibility:hidden; pointer-events:none;
+  transition:opacity var(--dur-mid) var(--ease), visibility 0s linear var(--dur-mid);
+}
+.focusveil.on{ opacity:1; visibility:visible; pointer-events:auto; transition:opacity var(--dur-mid) var(--ease), visibility 0s }
+.focusbox{ max-width:34rem; text-align:center; display:grid; gap:.2rem; justify-items:center }
+.focusbox h2{ font-size:clamp(1.5rem,4vw,2.4rem); font-weight:200; letter-spacing:-.02em; line-height:1.2; text-wrap:balance }
+.focusbox .why{ color:var(--flow); font-size:.78rem; letter-spacing:.08em; margin-top:.7rem }
+.ftimer{
+  font-family:ui-monospace,'SFMono-Regular','JetBrains Mono',Menlo,Consolas,monospace;
+  font-size:clamp(2.6rem,9vw,4.6rem); font-weight:200; letter-spacing:.02em;
+  color:var(--health); margin:1.4rem 0 .4rem; font-variant-numeric:tabular-nums;
+  text-shadow:0 0 1.2em rgba(52,211,153,.30);
+}
+.fask{ color:var(--ink-2); margin-bottom:.9rem }
+.facts{ display:flex; gap:.6rem; flex-wrap:wrap; justify-content:center; margin-top:.8rem }
+
+/* ---------- chrome ------------------------------------------------------- */
+.lab-back{
+  position:fixed; left:var(--gut); bottom:calc(var(--gut) * .8); z-index:12;
+  text-decoration:none; color:var(--ink-3);
+  font-size:.62rem; letter-spacing:.34em; text-transform:uppercase;
+  padding:.5rem .9rem; border-radius:999px; background:rgba(6,10,9,.5);
+  opacity:.55; transition:opacity var(--dur-mid) var(--ease), color var(--dur-fast) ease;
+}
+.engaged .lab-back{ opacity:1 }
+.lab-back:hover{ color:var(--ink) }
+
+.mono{ font-family:ui-monospace,'SFMono-Regular','JetBrains Mono',Menlo,Consolas,monospace }
+</style>
+</head>
+<body>
+
+<div class="field" aria-hidden="true">
+  <div class="fallfield"></div>
+  <canvas id="gl"></canvas>
+  <canvas id="cells"></canvas>
+</div>
+
+<div class="cellhits" id="cellhits" role="group" aria-label="Open tasks, as cells in the field"></div>
+
+<main class="stage" id="stage">
+
+  <!-- column 1 — the head lives here so ENGAGED is its resting layout; the
+       ambient pose is a JS-measured FLIP transform away from exactly this. -->
+  <div class="col">
+    <div class="head" id="head">
+      <p class="bignum"><span id="openCount">—</span></p>
+      <p class="headcap">open</p>
+      <p class="verdict" id="verdict" aria-live="polite">Reading the field…</p>
+      <p class="hint" id="hint">Move, or press any key</p>
+    </div>
+
+    <section class="panel" aria-labelledby="lb-org">
+      <h2 class="k" id="lb-org">Organism</h2>
+      <div class="projlist" id="projlist"></div>
+      <div class="footrow">
+        <button class="pill" id="resetBtn" type="button">Reset data</button>
+        <span class="muted" style="font-size:.7rem" id="resetNote"></span>
+      </div>
+    </section>
+  </div>
+
+  <!-- column 2 -->
+  <div class="col">
+    <section class="panel" aria-labelledby="lb-cur">
+      <h2 class="k" id="lb-cur">Current <span id="curName"></span></h2>
+      <form class="qa" id="qaForm" autocomplete="off">
+        <label class="sr-only" for="qaInput">Add a task</label>
+        <input id="qaInput" type="text" placeholder="Add a task…">
+        <button class="pill" type="submit">Add</button>
+      </form>
+      <p class="syntax"><b>!high</b> priority · <b>@fri</b> due · <b>#tag</b> · <b>~6h</b> estimate · <b>/asset</b> project · <b>*deep</b> energy</p>
+      <div id="taskArea"></div>
+    </section>
+  </div>
+
+  <!-- column 3 — the signature panel -->
+  <div class="col">
+    <section class="panel eng" aria-labelledby="lb-eng">
+      <h2 class="sr-only" id="lb-eng">The Momentum Engine</h2>
+
+      <div>
+        <p class="k">Pace</p>
+        <p class="pace-num"><span class="num" id="paceNum">0</span><em>a week</em></p>
+        <p class="trend flat" id="paceTrend">—</p>
+        <svg class="spark" id="spark" viewBox="0 0 140 44" preserveAspectRatio="none" role="img" aria-labelledby="sparkDesc"><title id="sparkDesc">Completions per day over the last 21 days</title></svg>
+        <p class="note" id="paceNote"></p>
+      </div>
+
+      <div>
+        <p class="k">Landing</p>
+        <p class="landline" id="landLine"></p>
+        <div class="landwrap">
+          <table class="land">
+            <caption class="sr-only">Forecast completion date per project at current pace</caption>
+            <thead><tr><th scope="col">Project</th><th scope="col">Left</th><th scope="col">Lands</th></tr></thead>
+            <tbody id="landBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <p class="k">Do this</p>
+        <div id="doitArea"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="focusveil" id="focusveil">
+  <div class="focusbox" role="dialog" aria-modal="true" aria-labelledby="focusTitle" id="focusbox">
+    <p class="k">Focus</p>
+    <h2 id="focusTitle"></h2>
+    <p class="why" id="focusWhy"></p>
+    <p class="ftimer" id="focusTimer" role="timer" aria-live="off">00:00</p>
+    <p class="fask" id="focusAsk" hidden>Did you finish it?</p>
+    <div class="facts" id="focusActs"></div>
+  </div>
+</div>
+
+<a class="lab-back" href="./index.html">Lab</a>
+<p class="sr-only" id="say" role="status" aria-live="polite"></p>
+
+<script src="_kernel.js"></script>
+<script>
+(function () {
+'use strict'
+
+var PT = window.PT
+if (!PT) {
+  document.getElementById('verdict').textContent =
+    'The kernel (_kernel.js) did not load. Open this file next to it.'
+  return
+}
+
+/* ==========================================================================
+   0 — small helpers
+   ========================================================================== */
+var $ = function (sel) { return document.querySelector(sel) }
+var docEl = document.documentElement
+var TAU = Math.PI * 2
+var DAY = PT.DAY
+var clamp = PT.clamp
+
+function esc (s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  })
+}
+function lerp (a, b, t) { return a + (b - a) * t }
+
+/* Stable 0..1 from a task id — cells must not jump when the set changes, so
+   every per-cell constant is derived from the id rather than array position. */
+function hash01 (str, salt) {
+  var h = 2166136261 ^ (salt || 0)
+  for (var i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0
+  }
+  return (h >>> 8) / 16777216
+}
+
+function hexToRgb (h) {
+  h = h.replace('#', '')
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+  var n = parseInt(h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function rgbToHex (r) {
+  return '#' + r.map(function (v) {
+    var s = Math.round(clamp(v, 0, 255)).toString(16)
+    return s.length < 2 ? '0' + s : s
+  }).join('')
+}
+function mixHex (a, b, t) {
+  var x = hexToRgb(a), y = hexToRgb(b)
+  return rgbToHex([lerp(x[0], y[0], t), lerp(x[1], y[1], t), lerp(x[2], y[2], t)])
+}
+
+var C = {
+  health: '#34d399', flow: '#22d3ee', attn: '#fbbf24',
+  distress: '#fb7185', slate: '#4d6b66', ink: '#e6f6f0'
+}
+
+var WORDS = ['nothing', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+  'eight', 'nine', 'ten', 'eleven', 'twelve']
+function words (n) { return n < WORDS.length ? WORDS[n] : String(n) }
+function cap (s) { return s.charAt(0).toUpperCase() + s.slice(1) }
+
+var reduced = PT.reducedMotion()
+function say (msg) { $('#say').textContent = msg }
+
+/* ==========================================================================
+   1 — derived vitals: the five numbers the whole design is wired to
+   ========================================================================== */
+function openTasks (projectId) {
+  return PT.tasks(projectId ? { project: projectId } : {}).filter(function (t) {
+    return t.status !== 'done'
+  })
+}
+
+function vitals () {
+  var ps = PT.projects()
+  var health = ps.length
+    ? ps.reduce(function (a, p) { return a + PT.health(p.id) }, 0) / ps.length
+    : 1
+  var m = PT.momentum()
+  var open = openTasks()
+  var now = Date.now()
+  var overdue = 0, staleSum = 0
+  open.forEach(function (t) {
+    if (t.due && t.due < now) overdue++
+    staleSum += PT.staleness(t)
+  })
+  return {
+    health: health,
+    // 1.2 finished tasks a day reads as "flat out" — above that the field
+    // would just clip, so the flow speed saturates there.
+    momentum: clamp(m.perDay / 1.2, 0, 1),
+    pressure: open.length ? overdue / open.length : 0,
+    stale: open.length ? staleSum / open.length : 0,
+    open: open.length,
+    overdue: overdue,
+    m: m
+  }
+}
+
+function verdictText (v) {
+  if (!v.open) {
+    return v.m.completed
+      ? 'Nothing open. ' + cap(words(v.m.completed)) + ' closed in the last fortnight.'
+      : 'Nothing open. The field is quiet.'
+  }
+  var a
+  if (v.m.completed === 0) a = 'Nothing has finished in ' + v.m.windowDays + ' days.'
+  else if (v.m.trend > 0.15) a = 'Momentum is rising — ' + v.m.perWeek + ' a week.'
+  else if (v.m.trend < -0.15) a = 'Momentum is falling.'
+  else a = 'Holding steady at ' + v.m.perWeek + ' a week.'
+
+  var cold = openTasks().filter(function (t) { return PT.staleness(t) > 0.5 }).length
+  var b
+  if (v.overdue > 0) {
+    b = cap(words(v.overdue)) + (v.overdue === 1 ? ' thing is' : ' things are') + ' overdue.'
+  } else if (cold > 0) {
+    b = cap(words(cold)) + (cold === 1 ? ' task has' : ' tasks have') + ' gone cold.'
+  } else {
+    b = 'Nothing is overdue.'
+  }
+  return a + ' ' + b
+}
+
+function healthColor (h) {
+  // rose → amber → green, so a meter's colour alone tells you the verdict
+  return h < 0.5
+    ? mixHex(C.distress, C.attn, h / 0.5)
+    : mixHex(C.attn, C.health, (h - 0.5) / 0.5)
+}
+
+/* ==========================================================================
+   2 — WebGL membrane
+   ========================================================================== */
+var VERT = [
+  'attribute vec2 a_pos;',
+  'void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }'
+].join('\n')
+
+var FRAG = [
+  '#ifdef GL_FRAGMENT_PRECISION_HIGH',
+  'precision highp float;',
+  '#else',
+  'precision mediump float;',
+  '#endif',
+  'uniform vec2  u_res;',
+  'uniform float u_time, u_health, u_momentum, u_pressure, u_stale, u_beat, u_engage, u_focus;',
+
+  // Hoskins-style hash: stable on mediump parts, unlike sin(dot(...)) hashes
+  'float hash21(vec2 p){',
+  '  vec3 q = fract(vec3(p.xyx) * 0.1031);',
+  '  q += dot(q, q.yzx + 33.33);',
+  '  return fract((q.x + q.y) * q.z);',
+  '}',
+  'float vnoise(vec2 p){',
+  '  vec2 i = floor(p), f = fract(p);',
+  '  vec2 u = f * f * (3.0 - 2.0 * f);',
+  '  float a = hash21(i), b = hash21(i + vec2(1.0, 0.0));',
+  '  float c = hash21(i + vec2(0.0, 1.0)), d = hash21(i + vec2(1.0, 1.0));',
+  '  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);',
+  '}',
+  'const mat2 M = mat2(0.80, 0.60, -0.60, 0.80);',
+  // two octave counts: the warp fields are cheap, the visible layers are not
+  'float fbm3(vec2 p){',
+  '  float s = 0.0, a = 0.55;',
+  '  for (int i = 0; i < 3; i++){ s += a * vnoise(p); p = M * p * 2.07; a *= 0.5; }',
+  '  return s;',
+  '}',
+  'float fbm4(vec2 p){',
+  '  float s = 0.0, a = 0.52;',
+  '  for (int i = 0; i < 4; i++){ s += a * vnoise(p); p = M * p * 2.03; a *= 0.5; }',
+  '  return s;',
+  '}',
+
+  'void main(){',
+  '  vec2 frag = gl_FragCoord.xy;',
+  '  vec2 uv = (frag - 0.5 * u_res) / min(u_res.x, u_res.y);',
+  '  float t = u_time;',
+
+  '  float flow = 0.014 + 0.085 * u_momentum;',   // velocity advects the medium
+  '  float breathe = 0.95 + 0.09 * u_beat;',
+  '  vec2 p = uv * (1.62 * breathe);',
+  '  p += vec2(0.34, -0.20) * u_stale;',          // neglect slides the mass off-centre
+
+  '  float warp = 0.55 + 1.35 * u_pressure;',     // overdue work churns
+
+  '  vec2 q = vec2(fbm3(p + vec2(0.0, t * flow)),',
+  '               fbm3(p + vec2(4.7, 2.1) - t * flow * 0.8));',
+  '  vec2 r = vec2(fbm3(p + 2.3 * q * warp + vec2(1.7, 9.2) + t * flow * 0.55),',
+  '               fbm3(p + 2.3 * q * warp + vec2(8.3, 2.8) - t * flow * 0.45));',
+
+  '  float dens = smoothstep(0.24, 0.90, fbm4(p + 3.1 * r * warp));',
+  // ridges of the warped field, not the field itself — this is what reads as
+  // membrane filament rather than plasma blob
+  '  float rid = fbm4(p * 1.85 + 4.0 * r * warp + t * flow * 0.3);',
+  '  float veins = 1.0 - abs(2.0 * rid - 1.0);',
+  '  veins = pow(clamp(veins, 0.0, 1.0), 6.0 + 10.0 * (1.0 - u_health));',
+
+  '  vec3 cold  = vec3(0.055, 0.125, 0.145);',
+  '  vec3 heal  = vec3(0.204, 0.827, 0.600);',
+  '  vec3 flowC = vec3(0.133, 0.827, 0.933);',
+  '  vec3 attn  = vec3(0.984, 0.749, 0.141);',
+  '  vec3 dist  = vec3(0.984, 0.443, 0.522);',
+
+  '  vec3 col = mix(cold, heal, clamp(u_health * (0.85 + 0.15 * u_beat), 0.0, 1.0));',
+  '  col = mix(col, flowC, 0.55 * u_momentum * smoothstep(0.25, 0.95, dens));',
+  '  col *= 0.18 + 1.10 * dens;',
+  '  col += attn * veins * dens * (0.45 + 0.55 * u_beat) * (0.30 + 0.55 * u_health);',
+  '  col += flowC * veins * 0.30 * u_momentum;',
+
+  '  float turb = smoothstep(0.42, 1.0, abs(q.x - r.y) * 2.3) * dens;',
+  '  col = mix(col, dist, clamp(u_pressure * turb * 1.15, 0.0, 0.80));',
+
+  '  float lum = dot(col, vec3(0.299, 0.587, 0.114));',
+  '  col = mix(col, vec3(lum), u_stale * 0.60);',   // neglect drains colour first
+
+  '  col *= 0.50 + 0.80 * u_health;',
+  '  col *= 0.88 + 0.22 * u_beat;',
+
+  '  float vig = smoothstep(1.18, 0.16, length(uv * vec2(1.0, 1.16)));',
+  '  col *= 0.22 + 0.88 * vig;',
+
+  '  col = mix(col, col * 0.30, u_engage);',
+  '  col = mix(col, col * 0.10, u_focus);',
+  '  col += vec3(0.024, 0.039, 0.035);',           // the substrate never goes black
+  '  col += (hash21(frag + fract(u_time) * 97.0) - 0.5) * 0.014;',  // kills banding
+  '  gl_FragColor = vec4(max(col, 0.0), 1.0);',
+  '}'
+].join('\n')
+
+var glc = $('#gl')
+var GL = null
+
+function compile (gl, type, src) {
+  var s = gl.createShader(type)
+  gl.shaderSource(s, src)
+  gl.compileShader(s)
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    var log = gl.getShaderInfoLog(s)
+    gl.deleteShader(s)
+    throw new Error('shader compile: ' + log)
+  }
+  return s
+}
+
+function initGL () {
+  var gl = glc.getContext('webgl', {
+    alpha: false, antialias: false, depth: false, stencil: false,
+    powerPreference: 'low-power',
+    // a frozen single frame must survive compositing when motion is reduced
+    preserveDrawingBuffer: reduced
+  }) || glc.getContext('experimental-webgl')
+  if (!gl) throw new Error('no webgl')
+
+  var vs = compile(gl, gl.VERTEX_SHADER, VERT)
+  var fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
+  var prog = gl.createProgram()
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog)
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error('link: ' + gl.getProgramInfoLog(prog))
+  }
+  gl.useProgram(prog)
+
+  var buf = gl.createBuffer()
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+  var loc = gl.getAttribLocation(prog, 'a_pos')
+  gl.enableVertexAttribArray(loc)
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0)
+
+  var u = {}
+  ;['u_res', 'u_time', 'u_health', 'u_momentum', 'u_pressure', 'u_stale', 'u_beat',
+    'u_engage', 'u_focus'].forEach(function (n) { u[n] = gl.getUniformLocation(prog, n) })
+
+  return { gl: gl, u: u }
+}
+
+try {
+  GL = initGL()
+} catch (e) {
+  docEl.classList.add('nogl')
+  GL = null
+}
+
+function sizeGL () {
+  if (!GL) return
+  var w = window.innerWidth, h = window.innerHeight
+  // The membrane is all low frequency — sampling it at native 4K buys nothing
+  // but heat, so the buffer targets a fixed pixel budget (and stays under the
+  // 1.5x DPR cap by construction).
+  var scale = clamp(Math.sqrt(430000 / Math.max(1, w * h)), 0.34, 0.75)
+  var bw = Math.max(2, Math.round(w * scale))
+  var bh = Math.max(2, Math.round(h * scale))
+  if (glc.width !== bw || glc.height !== bh) {
+    glc.width = bw; glc.height = bh
+    GL.gl.viewport(0, 0, bw, bh)
+  }
+}
+
+/* ==========================================================================
+   3 — cells: one luminous body per open task
+   ========================================================================== */
+var cc = $('#cells')
+var ctx = null
+try { ctx = cc.getContext('2d') } catch (e) { ctx = null }
+
+var SPRITE = {}
+function buildSprites () {
+  function mk (stops) {
+    var S = 128, c = document.createElement('canvas')
+    c.width = c.height = S
+    var g = c.getContext('2d')
+    var grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2)
+    stops.forEach(function (s) { grd.addColorStop(s[0], 'rgba(255,255,255,' + s[1] + ')') })
+    g.fillStyle = grd
+    g.fillRect(0, 0, S, S)
+    return c
+  }
+  SPRITE.glow = mk([[0, 1], [0.18, 0.62], [0.42, 0.20], [0.72, 0.045], [1, 0]])
+  SPRITE.core = mk([[0, 1], [0.35, 0.72], [0.7, 0.14], [1, 0]])
+  SPRITE.ring = mk([[0, 0], [0.58, 0], [0.78, 0.85], [0.9, 0.22], [1, 0]])
+}
+if (ctx) buildSprites()
+
+var tintCache = Object.create(null)
+function tinted (name, hex) {
+  var key = name + hex
+  var hit = tintCache[key]
+  if (hit) return hit
+  var src = SPRITE[name]
+  var c = document.createElement('canvas')
+  c.width = src.width; c.height = src.height
+  var g = c.getContext('2d')
+  g.drawImage(src, 0, 0)
+  g.globalCompositeOperation = 'source-in'
+  g.fillStyle = hex
+  g.fillRect(0, 0, c.width, c.height)
+  tintCache[key] = c
+  return c
+}
+
+var PRI_CORE = { high: 1, medium: 0.6, low: 0.32 }
+
+var cells = []            // live, one per open task
+var cellById = Object.create(null)
+var dying = []            // cells whose task left the board, mid-dissolve
+var particles = []
+var flares = []
+var fieldBoost = 0        // a completion literally brightens the organism
+
+var hitLayer = $('#cellhits')
+
+function cellColor (t) {
+  var proj = PT.project(t.projectId)
+  var base = (proj && proj.color) || C.health
+  var urg = PT.urgency(t)
+  var st = PT.staleness(t)
+  var overdue = !!(t.due && t.due < Date.now())
+  var target = overdue ? C.distress : urg > 0.55 ? C.attn : st > 0.5 ? C.slate : C.health
+  // quantised so the tint cache stays tiny (projects x 6 steps)
+  var mixT = Math.round((0.30 + 0.45 * Math.max(urg, st)) * 6) / 6
+  return mixHex(base, target, mixT)
+}
+
+function makeCell (t) {
+  var a = hash01(t.id, 1) * TAU
+  var c = {
+    id: t.id, task: t,
+    ang: a,
+    spin: (hash01(t.id, 2) < 0.5 ? -1 : 1) * (0.012 + hash01(t.id, 3) * 0.022),
+    band: 0.16 + hash01(t.id, 4) * 0.26,
+    wob: hash01(t.id, 5) * TAU,
+    x: 0, y: 0, rad: 10, alpha: 0, col: C.health, life: 1,
+    el: null
+  }
+  var b = document.createElement('button')
+  b.type = 'button'
+  b.className = 'cellhit'
+  b.tabIndex = -1
+  b.dataset.id = t.id
+  hitLayer.appendChild(b)
+  c.el = b
+  return c
+}
+
+function rebuildCells () {
+  var open = openTasks()
+  var seen = Object.create(null)
+  var next = []
+  open.forEach(function (t) {
+    var c = cellById[t.id]
+    if (!c) { c = makeCell(t); cellById[t.id] = c }
+    c.task = t
+    c.col = cellColor(t)
+    next.push(c)
+    seen[t.id] = 1
+  })
+  cells.forEach(function (c) {
+    if (seen[c.id]) return
+    delete cellById[c.id]
+    if (c.el && c.el.parentNode) c.el.parentNode.removeChild(c.el)
+    c.el = null
+    if (reduced) return
+    c.life = 1
+    dying.push(c)
+  })
+  cells = next
+  layoutHits()
+  syncRoving()
+}
+
+function layoutHits () {
+  var s = fieldScale()
+  cells.forEach(function (c) {
+    if (!c.el) return
+    var t = c.task
+    var d = Math.max(40, (10 + Math.sqrt(t.estimate || 2) * 9) * s * 2.1)
+    c.hit = d
+    c.el.style.width = d + 'px'
+    c.el.style.height = d + 'px'
+    c.el.setAttribute('aria-label',
+      t.title + ' — ' + (PT.project(t.projectId) || { name: 'unfiled' }).name +
+      ', ' + t.status + ', ' + t.estimate + ' hours' +
+      (t.due ? ', due ' + PT.relDay(t.due) : ''))
+  })
+}
+
+var rovingIdx = 0
+function syncRoving () {
+  if (!cells.length) return
+  rovingIdx = clamp(rovingIdx, 0, cells.length - 1)
+  cells.forEach(function (c, i) { if (c.el) c.el.tabIndex = i === rovingIdx ? 0 : -1 })
+}
+
+function fieldScale () {
+  var m = Math.min(window.innerWidth, window.innerHeight)
+  return clamp(m / 900, 0.55, 1.35)
+}
+
+function spawnBloom (c) {
+  if (!c || reduced) { fieldBoost = Math.min(1, fieldBoost + 0.35); return }
+  var n = 26
+  for (var i = 0; i < n; i++) {
+    var a = (i / n) * TAU + Math.random() * 0.4
+    var sp = (0.55 + Math.random() * 1.5) * c.rad * 0.06
+    particles.push({
+      x: c.x, y: c.y,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      r: c.rad * (0.12 + Math.random() * 0.22),
+      col: c.col, life: 1, decay: 0.55 + Math.random() * 0.5
+    })
+  }
+  flares.push({ x: c.x, y: c.y, r: c.rad, col: c.col, life: 1 })
+  fieldBoost = Math.min(1.2, fieldBoost + 0.55)
+}
+
+var cw = 0, ch = 0, cdpr = 1
+function sizeCells () {
+  if (!ctx) return
+  cdpr = Math.min(window.devicePixelRatio || 1, 1.5)   // DPR cap, per the brief
+  cw = window.innerWidth; ch = window.innerHeight
+  cc.width = Math.round(cw * cdpr)
+  cc.height = Math.round(ch * cdpr)
+}
+
+var selectedId = null
+
+function drawCells (dt, now, engage) {
+  if (!ctx) return
+  ctx.setTransform(cdpr, 0, 0, cdpr, 0, 0)
+  ctx.clearRect(0, 0, cw, ch)
+  ctx.globalCompositeOperation = 'lighter'
+
+  var cx = cw / 2, cy = ch / 2
+  var minD = Math.min(cw, ch)
+  var ax = clamp(cw / minD, 1, 1.85)
+  var s = fieldScale()
+  var spread = 1 + engage * 0.34            // the field steps back when engaged
+  var dim = 1 - engage * 0.45
+  var speed = 0.25 + 0.75 * shown.momentum
+
+  for (var i = 0; i < cells.length; i++) {
+    var c = cells[i], t = c.task
+    var st = PT.staleness(t)
+    var overdue = !!(t.due && t.due < Date.now())
+    var urg = PT.urgency(t)
+
+    if (!reduced) c.ang += c.spin * dt * speed
+
+    // stale work drifts outward — the organism pushes it to the rim
+    var band = (c.band + st * 0.24) * spread
+    var breath = 1 + 0.05 * Math.sin(now * 0.00022 + c.wob)
+    var rr = minD * band * breath
+    var tremor = overdue && !reduced ? Math.sin(now * 0.017 + c.wob) * 2.2 * (0.4 + urg * 0.8) : 0
+
+    c.x = cx + Math.cos(c.ang) * rr * ax + tremor
+    c.y = cy + Math.sin(c.ang) * rr + (overdue && !reduced ? Math.cos(now * 0.021 + c.wob) * 1.6 : 0)
+    c.rad = (10 + Math.sqrt(t.estimate || 2) * 9) * s     // radius = estimate
+
+    var bright = (0.30 + 0.70 * (1 - st)) * dim * (1 + fieldBoost * 0.5)
+    var coreB = (PRI_CORE[t.priority] || 0.5) * bright
+    c.alpha = bright
+
+    paint(c.x, c.y, c.rad, c.col, bright, coreB, overdue ? clamp(urg, 0, 1) : 0,
+      selectedId === c.id)
+
+    if (c.el) {
+      c.el.style.transform = 'translate3d(' + (c.x - c.hit / 2) + 'px,' +
+        (c.y - c.hit / 2) + 'px,0)'
+    }
+  }
+
+  // cells whose task was deleted rather than finished: quiet dissolve
+  for (i = dying.length - 1; i >= 0; i--) {
+    var d = dying[i]
+    d.life -= dt * 1.6
+    if (d.life <= 0) { dying.splice(i, 1); continue }
+    paint(d.x, d.y, d.rad * (1 + (1 - d.life) * 0.5), d.col, d.life * 0.5 * dim,
+      d.life * 0.3, 0, false)
+  }
+
+  for (i = flares.length - 1; i >= 0; i--) {
+    var f = flares[i]
+    f.life -= dt * 1.35
+    if (f.life <= 0) { flares.splice(i, 1); continue }
+    var g = 1 - f.life
+    var img = tinted('ring', f.col)
+    var sz = f.r * (2.2 + g * 7)
+    ctx.globalAlpha = Math.pow(f.life, 1.6) * 0.9
+    ctx.drawImage(img, f.x - sz / 2, f.y - sz / 2, sz, sz)
+    var gi = tinted('glow', f.col)
+    var gs = f.r * (3 + g * 3)
+    ctx.globalAlpha = Math.pow(f.life, 2.2) * 0.75
+    ctx.drawImage(gi, f.x - gs / 2, f.y - gs / 2, gs, gs)
+  }
+
+  for (i = particles.length - 1; i >= 0; i--) {
+    var p = particles[i]
+    p.life -= dt * p.decay
+    if (p.life <= 0) { particles.splice(i, 1); continue }
+    p.x += p.vx * dt * 60; p.y += p.vy * dt * 60
+    p.vx *= 0.975; p.vy *= 0.975
+    var pi = tinted('glow', p.col)
+    var ps = p.r * (1 + (1 - p.life) * 1.6) * 4
+    ctx.globalAlpha = Math.pow(p.life, 1.4) * 0.55
+    ctx.drawImage(pi, p.x - ps / 2, p.y - ps / 2, ps, ps)
+  }
+
+  ctx.globalAlpha = 1
+  ctx.globalCompositeOperation = 'source-over'
+}
+
+function paint (x, y, rad, col, halo, core, rim, sel) {
+  var g = tinted('glow', col)
+  var sz = rad * 3.6
+  ctx.globalAlpha = clamp(halo * 0.20, 0, 1)
+  ctx.drawImage(g, x - sz / 2, y - sz / 2, sz, sz)
+  sz = rad * 2.0
+  ctx.globalAlpha = clamp(halo * 0.38, 0, 1)
+  ctx.drawImage(g, x - sz / 2, y - sz / 2, sz, sz)
+  if (core > 0.01) {
+    var cimg = tinted('core', mixHex(col, C.ink, 0.45))
+    sz = rad * 1.05
+    ctx.globalAlpha = clamp(core * 0.9, 0, 1)
+    ctx.drawImage(cimg, x - sz / 2, y - sz / 2, sz, sz)
+  }
+  if (rim > 0.01) {
+    var r = tinted('ring', C.distress)
+    sz = rad * 2.7
+    ctx.globalAlpha = clamp(rim * 0.55, 0, 1)
+    ctx.drawImage(r, x - sz / 2, y - sz / 2, sz, sz)
+  }
+  if (sel) {
+    var sr = tinted('ring', C.flow)
+    sz = rad * 3.4
+    ctx.globalAlpha = 0.75
+    ctx.drawImage(sr, x - sz / 2, y - sz / 2, sz, sz)
+  }
+}
+
+/* ==========================================================================
+   4 — the loop
+   ========================================================================== */
+var target = { health: 0.5, momentum: 0.3, pressure: 0, stale: 0 }
+var shown = { health: 0.5, momentum: 0.3, pressure: 0, stale: 0 }
+var engageShown = 0, focusShown = 0
+var simTime = 0, beat = 0.5
+var raf = 0, running = false, last = 0
+
+function pullVitals () {
+  var v = vitals()
+  target.health = v.health
+  target.momentum = v.momentum
+  target.pressure = v.pressure
+  target.stale = v.stale
+  return v
+}
+
+function pushFallbackVars () {
+  var s = docEl.style
+  s.setProperty('--f-health', (0.06 + shown.health * 0.26).toFixed(3))
+  s.setProperty('--f-flow', (0.04 + shown.momentum * 0.20).toFixed(3))
+  s.setProperty('--f-press', (0.02 + shown.pressure * 0.20).toFixed(3))
+  s.setProperty('--f-stale', shown.stale.toFixed(3))
+}
+
+function renderGL () {
+  if (!GL) return
+  var gl = GL.gl, u = GL.u
+  gl.uniform2f(u.u_res, glc.width, glc.height)
+  gl.uniform1f(u.u_time, simTime)
+  gl.uniform1f(u.u_health, clamp(shown.health + fieldBoost * 0.35, 0, 1))
+  gl.uniform1f(u.u_momentum, clamp(shown.momentum + fieldBoost * 0.3, 0, 1))
+  gl.uniform1f(u.u_pressure, shown.pressure)
+  gl.uniform1f(u.u_stale, shown.stale)
+  gl.uniform1f(u.u_beat, beat)
+  gl.uniform1f(u.u_engage, engageShown)
+  gl.uniform1f(u.u_focus, focusShown)
+  gl.drawArrays(gl.TRIANGLES, 0, 3)
+}
+
+var bigSpan = $('#openCount')
+
+function frame (now) {
+  raf = requestAnimationFrame(frame)
+  var dt = last ? Math.min(0.05, (now - last) / 1000) : 0.016
+  last = now
+  simTime += dt
+
+  var k = 1 - Math.pow(0.001, dt)          // ~1.2s to settle, frame-rate free
+  shown.health = lerp(shown.health, target.health, k)
+  shown.momentum = lerp(shown.momentum, target.momentum, k)
+  shown.pressure = lerp(shown.pressure, target.pressure, k)
+  shown.stale = lerp(shown.stale, target.stale, k)
+  engageShown = lerp(engageShown, engaged ? 1 : 0, 1 - Math.pow(0.004, dt))
+  focusShown = lerp(focusShown, focusState ? 1 : 0, 1 - Math.pow(0.004, dt))
+  fieldBoost = Math.max(0, fieldBoost - dt * 0.55)
+
+  // breath period: 9s flat out, 22s when nothing is moving
+  var period = lerp(22, 9, shown.momentum)
+  beat = 0.5 + 0.5 * Math.sin((simTime / period) * TAU)
+  bigSpan.style.transform = 'scale(' + (1 + 0.012 * (beat - 0.5) * 2).toFixed(4) + ')'
+
+  renderGL()
+  drawCells(dt, now, engageShown)
+}
+
+function start () {
+  if (running || reduced || document.hidden) return
+  running = true; last = 0
+  raf = requestAnimationFrame(frame)
+}
+function stop () {
+  if (!raf) return
+  cancelAnimationFrame(raf); raf = 0; running = false
+}
+function renderOnce () {
+  // reduced-motion path: one honest frame with the same uniforms, no loop
+  shown.health = target.health; shown.momentum = target.momentum
+  shown.pressure = target.pressure; shown.stale = target.stale
+  engageShown = engaged ? 1 : 0
+  focusShown = focusState ? 1 : 0
+  beat = 0.5
+  bigSpan.style.transform = 'none'
+  renderGL()
+  drawCells(0, performance.now(), engageShown)
+  pushFallbackVars()
+}
+
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) stop()
+  else if (!reduced) start()
+})
+
+/* ==========================================================================
+   5 — ambient <-> engaged
+   ========================================================================== */
+var engaged = false
+var idleTimer = 0
+var IDLE_MS = 20000
+
+function layoutHead () {
+  // FLIP: the head's ENGAGED pose is its real layout box. The ambient pose is
+  // a transform measured off that box, so the two modes are one move, not two
+  // layouts that happen to look similar.
+  var head = $('#head')
+  var numEl = bigSpan.parentNode
+  head.style.setProperty('--head-t', 'none')
+  var r = head.getBoundingClientRect()
+  if (!r.width || !r.height) return
+  var fs = parseFloat(getComputedStyle(numEl).fontSize) || 40
+  var vw = window.innerWidth, vh = window.innerHeight
+  var wantPx = Math.min(vh * 0.26, vw * 0.30, 300)
+  var k = clamp(wantPx / fs, 1.15, 4.6)
+  k = Math.min(k, (vw * 0.90) / r.width)              // never overflow sideways
+  k = Math.max(k, 1)
+  var w = r.width * k, h = r.height * k
+  var tx = (vw - w) / 2 - r.left
+  var ty = vh * 0.44 - h / 2 - r.top
+  head.style.setProperty('--head-t',
+    'translate(' + tx.toFixed(1) + 'px,' + ty.toFixed(1) + 'px) scale(' + k.toFixed(3) + ')')
+}
+
+function engage () {
+  scheduleIdle()
+  if (engaged) return
+  engaged = true
+  docEl.classList.add('engaged')
+  if (reduced) renderOnce()
+}
+function disengage () {
+  if (!engaged || focusState) return
+  var ae = document.activeElement
+  if (ae && ae !== document.body && $('#stage').contains(ae)) ae.blur()
+  engaged = false
+  docEl.classList.remove('engaged')
+  if (reduced) renderOnce()
+}
+function scheduleIdle () {
+  clearTimeout(idleTimer)
+  if (reduced) return          // auto-returning would be unrequested motion
+  idleTimer = setTimeout(function () {
+    var ae = document.activeElement
+    // typing is not idling
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return scheduleIdle()
+    if (focusState) return scheduleIdle()
+    disengage()
+  }, IDLE_MS)
+}
+
+var lastMove = 0
+function activity (e) {
+  if (e && e.type === 'pointermove') {
+    var n = performance.now()
+    if (n - lastMove < 400) return
+    lastMove = n
+  }
+  engage()
+}
+;['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart', 'focusin']
+  .forEach(function (ev) {
+    window.addEventListener(ev, activity, { passive: true })
+  })
+
+/* ==========================================================================
+   6 — rendering the interface
+   ========================================================================== */
+var activeProject = null      // null = everything
+var pendingDel = null
+var delTimer = 0
+
+function projectName (id) {
+  var p = PT.project(id)
+  return p ? p.name : 'unfiled'
+}
+
+function renderHead (v) {
+  bigSpan.textContent = v.open
+  $('#verdict').textContent = verdictText(v)
+}
+
+function renderProjects () {
+  var out = []
+  var all = PT.stats()
+  out.push(row(null, 'Everything', '◎', PT.projects().length
+    ? PT.projects().reduce(function (a, p) { return a + PT.health(p.id) }, 0) / PT.projects().length
+    : 1, all))
+  PT.projects().forEach(function (p) {
+    out.push(row(p.id, p.name, p.glyph, PT.health(p.id), PT.stats(p.id), p.color))
+  })
+  $('#projlist').innerHTML = out.join('')
+
+  function row (id, name, glyph, h, s, color) {
+    var open = s.total - s.done
+    var col = healthColor(h)
+    var meta = open === 0
+      ? (s.total ? 'all ' + s.total + ' finished' : 'no tasks yet')
+      : open + ' open · ' + s.hoursLeft + 'h' + (s.overdue ? ' · ' + s.overdue + ' overdue' : '')
+    return '<button class="proj" type="button" data-act="proj" data-id="' + (id || '') + '"' +
+      ' aria-pressed="' + (activeProject === id ? 'true' : 'false') + '">' +
+      '<span class="glyph" aria-hidden="true" style="color:' + (color || col) + '">' + esc(glyph) + '</span>' +
+      '<span class="pname">' + esc(name) + '</span>' +
+      '<span class="meter"><i style="--v:' + h.toFixed(3) + ';--c:' + col + '"></i></span>' +
+      '<span class="pmeta">' + esc(meta) + '</span>' +
+      '</button>'
+  }
+}
+
+function taskRow (t, isDone) {
+  var now = Date.now()
+  var bits = []
+  if (t.priority === 'high') bits.push('<span class="hi">high</span>')
+  bits.push(t.estimate + 'h')
+  if (t.due) {
+    var lbl = PT.relDay(t.due)
+    bits.push(t.due < now
+      ? '<span class="over">' + esc(lbl) + '</span>'
+      : t.due - now < 3 * DAY ? '<span class="soon">' + esc(lbl) + '</span>' : esc(lbl))
+  }
+  if (!activeProject) bits.push(esc(projectName(t.projectId)))
+  if (t.tags && t.tags.length) bits.push('#' + esc(t.tags.join(' #')))
+
+  var seg = ['todo', 'doing', 'done'].map(function (s) {
+    return '<button type="button" data-act="move" data-id="' + t.id + '" data-to="' + s + '"' +
+      ' aria-pressed="' + (t.status === s ? 'true' : 'false') +
+      '" aria-label="Move &quot;' + esc(t.title) + '&quot; to ' + s + '">' +
+      (s === 'todo' ? 'to&nbsp;do' : s) + '</button>'
+  }).join('')
+
+  var armed = pendingDel === t.id
+  return '<li class="task' + (isDone ? ' done' : '') + (selectedId === t.id ? ' sel' : '') +
+    '" data-id="' + t.id + '">' +
+    '<button class="tsel" type="button" data-act="sel" data-id="' + t.id + '">' +
+    '<span class="ttitle">' + esc(t.title) + '</span>' +
+    '<span class="tmeta">' + bits.join(' · ') + '</span></button>' +
+    '<span class="tacts"><span class="seg" role="group" aria-label="Status">' + seg + '</span>' +
+    '<button class="del' + (armed ? ' arm' : '') + '" type="button" data-act="del" data-id="' + t.id + '"' +
+    ' aria-label="' + (armed ? 'Confirm delete' : 'Delete') + ' &quot;' + esc(t.title) + '&quot;">' +
+    (armed ? 'sure?' : '&times;') + '</button></span></li>'
+}
+
+function renderTasks () {
+  var scope = activeProject ? { project: activeProject } : {}
+  var all = PT.tasks(scope)
+  $('#curName').textContent = activeProject ? '— ' + projectName(activeProject) : '— everything'
+  $('#qaInput').placeholder = 'Add to ' + (activeProject ? projectName(activeProject) : PT.projects()[0] ? PT.projects()[0].name : 'the board') + '…'
+
+  if (!all.length) {
+    $('#taskArea').innerHTML = '<p class="empty">Nothing here. Type above to start something, ' +
+      'or reset the data on the left.</p>'
+    return
+  }
+
+  var byStatus = { doing: [], todo: [], done: [] }
+  all.forEach(function (t) { byStatus[t.status].push(t) })
+  // open work sorts by the kernel's own score, so the top of the list is
+  // genuinely the next thing worth doing
+  byStatus.doing.sort(function (a, b) { return PT.score(b) - PT.score(a) })
+  byStatus.todo.sort(function (a, b) { return PT.score(b) - PT.score(a) })
+  byStatus.done.sort(function (a, b) { return (b.doneAt || 0) - (a.doneAt || 0) })
+
+  var html = ''
+  function group (label, arr, isDone, limit) {
+    if (!arr.length) return ''
+    var shownArr = limit ? arr.slice(0, limit) : arr
+    var s = '<section class="group"><p class="k">' + label + ' <span class="num">' + arr.length + '</span></p>' +
+      '<ul class="tasks">' + shownArr.map(function (t) { return taskRow(t, isDone) }).join('') + '</ul>'
+    if (limit && arr.length > limit) {
+      s += '<p class="note" style="padding:.5rem .7rem">+ ' + (arr.length - limit) + ' more finished</p>'
+    }
+    return s + '</section>'
+  }
+  html += group('In flight', byStatus.doing, false)
+  html += group('Waiting', byStatus.todo, false)
+  html += group('Finished', byStatus.done, true, 6)
+  $('#taskArea').innerHTML = html
+}
+
+function completionsPerDay (days) {
+  var out = new Array(days)
+  for (var i = 0; i < days; i++) out[i] = 0
+  var now = Date.now(), start = now - days * DAY
+  PT.tasks({ status: 'done' }).forEach(function (t) {
+    if (!t.doneAt || t.doneAt < start) return
+    var i = Math.floor((t.doneAt - start) / DAY)
+    if (i >= 0 && i < days) out[i]++
+  })
+  return out
+}
+
+function renderSpark () {
+  var days = 21
+  var data = completionsPerDay(days)
+  var max = Math.max(1, Math.max.apply(null, data))
+  var W = 140, H = 44
+  var pts = data.map(function (v, i) {
+    var x = (i / (days - 1)) * W
+    var y = H - (v / max) * (H - 4) - 2
+    return [x, y]
+  })
+  var line = pts.map(function (p, i) {
+    return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)
+  }).join(' ')
+  var area = line + ' L' + W + ' ' + H + ' L0 ' + H + ' Z'
+  var splitX = (((days - 7) / (days - 1)) * W).toFixed(1)
+
+  $('#spark').innerHTML =
+    '<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0%" stop-color="' + C.health + '" stop-opacity=".38"/>' +
+    '<stop offset="100%" stop-color="' + C.health + '" stop-opacity="0"/>' +
+    '</linearGradient></defs>' +
+    '<path d="' + area + '" fill="url(#sg)"/>' +
+    '<line x1="' + splitX + '" y1="0" x2="' + splitX + '" y2="' + H + '" stroke="' + C.ink +
+    '" stroke-opacity=".16" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>' +
+    '<path d="' + line + '" fill="none" stroke="' + C.health + '" stroke-width="1.5" ' +
+    'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+}
+
+function renderEngine () {
+  var m = PT.momentum()
+  $('#paceNum').textContent = m.perWeek
+  var tr = $('#paceTrend')
+  if (m.completed === 0) {
+    tr.className = 'trend flat'
+    tr.textContent = '· stalled ·'
+  } else if (m.trend > 0.15) {
+    tr.className = 'trend up'
+    tr.textContent = '▲ rising'
+  } else if (m.trend < -0.15) {
+    tr.className = 'trend down'
+    tr.textContent = '▼ falling'
+  } else {
+    tr.className = 'trend flat'
+    tr.textContent = '— steady'
+  }
+  renderSpark()
+  $('#paceNote').textContent =
+    m.recent + ' finished in the last 7 days · ' + m.older + ' the week before. ' +
+    (m.completed === 0 ? 'No completions in the window — the pace figure is a floor, not a promise.' : '')
+
+  // LANDING
+  var f = PT.forecast(activeProject || undefined)
+  var scopeName = activeProject ? projectName(activeProject) : 'everything'
+  var line = $('#landLine')
+  if (f.done) {
+    line.innerHTML = 'Nothing left on <b>' + esc(scopeName) + '</b>.'
+  } else if (!f.date) {
+    line.innerHTML = 'No completions to forecast from — <b>' + esc(scopeName) +
+      '</b> has no landing date, only ' + f.remaining + ' open items.'
+  } else {
+    line.innerHTML = 'At this pace you finish <b>' + esc(scopeName) + '</b> on ' +
+      esc(f.date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })) +
+      ' — ' + f.days + ' days out.'
+  }
+
+  $('#landBody').innerHTML = PT.projects().map(function (p) {
+    var pf = PT.forecast(p.id)
+    var cell
+    if (pf.done) cell = '<span class="nopace">done</span>'
+    else if (!pf.date) cell = '<span class="nopace">no pace</span>'
+    else cell = esc(pf.date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) +
+      ' <span class="muted">' + pf.days + 'd</span>'
+    return '<tr><td>' + esc(p.name) + '</td><td class="num">' + pf.remaining + '</td><td>' + cell + '</td></tr>'
+  }).join('') || '<tr><td colspan="3" class="nopace">No projects.</td></tr>'
+
+  // DO THIS
+  var na = PT.nextAction(activeProject || undefined)
+  var area = $('#doitArea')
+  if (!na) {
+    area.innerHTML = '<p class="note">Nothing open in this scope. That is the whole report.</p>'
+  } else {
+    area.innerHTML =
+      '<p class="doit">' + esc(na.task.title) + '</p>' +
+      '<p class="doit-why">' + esc(na.why) + '</p>' +
+      '<p class="doit-proj">' + esc(projectName(na.task.projectId)) +
+      (na.runnerUp ? ' · next up: ' + esc(na.runnerUp.title) : '') + '</p>' +
+      '<button class="focusbtn" type="button" data-act="focus" data-id="' + na.task.id + '">Focus</button>'
+  }
+}
+
+function renderAll () {
+  var v = pullVitals()
+  renderHead(v)
+  renderProjects()
+  renderTasks()
+  renderEngine()
+  pushFallbackVars()
+  layoutHead()
+}
+
+/* ==========================================================================
+   7 — interaction
+   ========================================================================== */
+function withFocusKept (fn) {
+  var ae = document.activeElement
+  var key = ae && ae.dataset ? (ae.dataset.act || '') + '|' + (ae.dataset.id || '') + '|' + (ae.dataset.to || '') : null
+  var inQa = ae === $('#qaInput')
+  fn()
+  if (inQa) { $('#qaInput').focus(); return }
+  if (!key) return
+  var again = document.querySelector('[data-act="' + (ae.dataset.act || '') + '"]' +
+    (ae.dataset.id ? '[data-id="' + ae.dataset.id + '"]' : '') +
+    (ae.dataset.to ? '[data-to="' + ae.dataset.to + '"]' : ''))
+  if (again && again.focus) again.focus()
+}
+
+$('#stage').addEventListener('click', function (e) {
+  var btn = e.target.closest ? e.target.closest('button[data-act]') : null
+  if (!btn) return
+  var act = btn.dataset.act
+  var id = btn.dataset.id
+
+  if (act === 'proj') {
+    activeProject = id || null
+    selectedId = null
+    withFocusKept(renderAll)
+    say('Showing ' + (activeProject ? projectName(activeProject) : 'everything'))
+  } else if (act === 'move') {
+    PT.moveTask(id, btn.dataset.to)
+  } else if (act === 'del') {
+    if (pendingDel === id) {
+      var t = PT.task(id)
+      clearTimeout(delTimer)
+      pendingDel = null
+      PT.removeTask(id)
+      say('Deleted ' + (t ? t.title : 'task'))
+    } else {
+      pendingDel = id
+      clearTimeout(delTimer)
+      delTimer = setTimeout(function () { pendingDel = null; renderTasks() }, 3500)
+      renderTasks()
+      var again = document.querySelector('.del[data-id="' + id + '"]')
+      if (again) again.focus()
+    }
+  } else if (act === 'sel') {
+    selectTask(id)
+  } else if (act === 'focus') {
+    startFocus(id)
+  }
+})
+
+function selectTask (id) {
+  selectedId = selectedId === id ? null : id
+  withFocusKept(renderTasks)
+  var t = PT.task(id)
+  if (t && selectedId) say('Selected ' + t.title + ' — ' + PT.explain(t))
+}
+
+/* quick add — the only way tasks are created here, no window.prompt anywhere */
+$('#qaForm').addEventListener('submit', function (e) {
+  e.preventDefault()
+  var input = $('#qaInput')
+  var text = input.value.trim()
+  if (!text) { say('Type something to add first.'); return }
+  var t = PT.quickAdd(text, activeProject || undefined)
+  if (!t) { say('That needs a title — the modifiers alone are not a task.'); return }
+  input.value = ''
+  selectedId = t.id
+  say('Added ' + t.title + ' to ' + projectName(t.projectId))
+})
+
+/* reset — two-step, because there is no undo in the kernel */
+var resetArmed = false, resetTimer = 0
+$('#resetBtn').addEventListener('click', function () {
+  if (!resetArmed) {
+    resetArmed = true
+    this.textContent = 'Confirm reset'
+    $('#resetNote').textContent = 'wipes local changes'
+    clearTimeout(resetTimer)
+    resetTimer = setTimeout(function () {
+      resetArmed = false
+      $('#resetBtn').textContent = 'Reset data'
+      $('#resetNote').textContent = ''
+    }, 4000)
+    return
+  }
+  clearTimeout(resetTimer)
+  resetArmed = false
+  this.textContent = 'Reset data'
+  $('#resetNote').textContent = ''
+  selectedId = null
+  activeProject = null
+  PT.reset()
+  say('Data reset to the seed.')
+})
+
+/* cells: click to select, arrows to move between them */
+hitLayer.addEventListener('click', function (e) {
+  var b = e.target.closest ? e.target.closest('.cellhit') : null
+  if (!b) return
+  engage()
+  var i = cells.findIndex ? cells.findIndex(function (c) { return c.id === b.dataset.id }) : -1
+  if (i >= 0) { rovingIdx = i; syncRoving() }
+  selectedId = b.dataset.id
+  renderTasks()
+  var t = PT.task(b.dataset.id)
+  if (t) say(t.title + ' — ' + PT.explain(t))
+})
+
+hitLayer.addEventListener('keydown', function (e) {
+  if (!cells.length) return
+  var d = 0
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') d = 1
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') d = -1
+  else if (e.key === 'Home') d = -cells.length
+  else if (e.key === 'End') d = cells.length
+  else return
+  e.preventDefault()
+  rovingIdx = ((rovingIdx + d) % cells.length + cells.length) % cells.length
+  syncRoving()
+  if (cells[rovingIdx].el) cells[rovingIdx].el.focus()
+})
+
+hitLayer.addEventListener('focusin', function (e) {
+  var b = e.target.closest ? e.target.closest('.cellhit') : null
+  if (b) selectedId = b.dataset.id
+})
+
+/* ==========================================================================
+   8 — focus mode
+   ========================================================================== */
+var focusState = null      // { id, t0, asking }
+var focusTick = 0
+var focusReturn = null
+var veil = $('#focusveil')
+
+function fmt (ms) {
+  var s = Math.max(0, Math.floor(ms / 1000))
+  var m = Math.floor(s / 60)
+  return (m < 10 ? '0' : '') + m + ':' + ((s % 60) < 10 ? '0' : '') + (s % 60)
+}
+
+function startFocus (id) {
+  var t = PT.task(id)
+  if (!t) return
+  focusReturn = document.activeElement
+  if (t.status !== 'doing') PT.moveTask(id, 'doing')
+  focusState = { id: id, t0: Date.now(), asking: false }
+  docEl.classList.add('focusing')
+  veil.classList.add('on')
+  $('#focusTitle').textContent = t.title
+  $('#focusWhy').textContent = PT.explain(t) + ' · ' + projectName(t.projectId)
+  $('#focusTimer').textContent = '00:00'
+  paintFocusActs()
+  clearInterval(focusTick)
+  focusTick = setInterval(function () {
+    if (!focusState || focusState.asking) return
+    $('#focusTimer').textContent = fmt(Date.now() - focusState.t0)
+  }, 1000)
+  setTimeout(function () {
+    var first = veil.querySelector('button')
+    if (first) first.focus()
+  }, 30)
+  say('Focus started on ' + t.title + '. It is now in flight.')
+  if (reduced) renderOnce()
+}
+
+function paintFocusActs () {
+  var acts = $('#focusActs')
+  if (!focusState) return
+  if (!focusState.asking) {
+    $('#focusAsk').hidden = true
+    acts.innerHTML = '<button class="pill" type="button" data-f="end">End focus</button>'
+  } else {
+    $('#focusAsk').hidden = false
+    acts.innerHTML =
+      '<button class="pill" type="button" data-f="done">Mark done</button>' +
+      '<button class="pill" type="button" data-f="park">Park it</button>' +
+      '<button class="pill" type="button" data-f="keep">Keep going</button>'
+  }
+  var first = acts.querySelector('button')
+  if (first) first.focus()
+}
+
+function closeFocus () {
+  clearInterval(focusTick)
+  focusState = null
+  docEl.classList.remove('focusing')
+  veil.classList.remove('on')
+  if (focusReturn && document.contains(focusReturn) && focusReturn.focus) focusReturn.focus()
+  focusReturn = null
+  scheduleIdle()
+  if (reduced) renderOnce()
+}
+
+veil.addEventListener('click', function (e) {
+  var b = e.target.closest ? e.target.closest('button[data-f]') : null
+  if (!b || !focusState) return
+  var f = b.dataset.f
+  var id = focusState.id
+  var mins = Math.round((Date.now() - focusState.t0) / 60000)
+  if (f === 'end') { focusState.asking = true; paintFocusActs(); return }
+  if (f === 'done') {
+    closeFocus()
+    PT.moveTask(id, 'done')
+    say('Finished after ' + mins + ' minutes.')
+  } else if (f === 'park') {
+    closeFocus()
+    PT.moveTask(id, 'todo')
+    say('Parked after ' + mins + ' minutes.')
+  } else {
+    closeFocus()
+    say('Left in flight after ' + mins + ' minutes.')
+  }
+})
+
+veil.addEventListener('keydown', function (e) {
+  if (!focusState) return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    if (!focusState.asking) { focusState.asking = true; paintFocusActs() }
+    else closeFocus()
+    return
+  }
+  if (e.key !== 'Tab') return
+  var f = veil.querySelectorAll('button')
+  if (!f.length) return
+  var first = f[0], last = f[f.length - 1]
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+})
+
+/* ==========================================================================
+   9 — wiring
+   ========================================================================== */
+PT.on('change', function (entry) {
+  if (entry && entry.type === 'task.move' && entry.to === 'done') {
+    spawnBloom(cellById[entry.id])           // grab the cell before it is culled
+  }
+  if (entry && entry.reason === 'reset') {
+    // every id changed underneath us — start the field from scratch
+    cells.forEach(function (c) { if (c.el && c.el.parentNode) c.el.parentNode.removeChild(c.el) })
+    cells = []; cellById = Object.create(null); dying = []; particles = []; flares = []
+    selectedId = null
+  }
+  rebuildCells()
+  withFocusKept(renderAll)
+  if (reduced) renderOnce()
+})
+
+var resizeTimer = 0
+window.addEventListener('resize', function () {
+  clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(function () {
+    sizeGL(); sizeCells(); layoutHits(); layoutHead()
+    if (reduced || document.hidden) renderOnce()
+  }, 120)
+})
+
+if (window.matchMedia) {
+  var mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+  var onMQ = function () {
+    reduced = PT.reducedMotion()
+    if (reduced) { stop(); renderOnce() } else { start() }
+  }
+  if (mq.addEventListener) mq.addEventListener('change', onMQ)
+  else if (mq.addListener) mq.addListener(onMQ)
+}
+
+sizeGL()
+sizeCells()
+pullVitals()
+shown.health = target.health
+shown.momentum = target.momentum
+shown.pressure = target.pressure
+shown.stale = target.stale
+rebuildCells()
+renderAll()
+// the ambient pose depends on measured text, which needs one layout pass
+requestAnimationFrame(layoutHead)
+if (reduced) renderOnce(); else start()
+
+})()
+</script>
+</body>
+</html>

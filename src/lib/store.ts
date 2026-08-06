@@ -32,6 +32,8 @@ export interface Task {
   position: number
   due_date: string | null
   created_at: string
+  /** Maintained by the `tasks_touch` trigger. Staleness and velocity read it. */
+  updated_at?: string
 }
 
 export interface AuthResult {

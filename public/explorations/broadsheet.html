@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BROADSHEET — Project Tracker Lab</title>
+<meta name="color-scheme" content="light dark">
+<style>
+/* ===========================================================================
+   BROADSHEET — direction 03
+   The anti-dashboard. A dashboard asks you to scan widgets; a front page tells
+   you what matters in a hierarchy you already know how to read.
+
+   House rules, enforced throughout: no shadows, no gradients on content, no
+   border-radius. Structure comes from rules and whitespace, the way it does in
+   print. Numerals are monospace with tabular figures so columns align.
+   =========================================================================== */
+:root {
+  --paper: #f7f4ec;
+  --paper-2: #efeade;
+  --ink: #14110c;
+  --ink-2: #4a453b;
+  --ink-3: #7d7668;
+  --red: #a4291f;
+  --rule: #cfc7b8;
+  --rule-dark: #14110c;
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  --mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --gap: 1.6rem;
+}
+
+/* Dusk edition: a real ink-on-newsprint inversion with its own values, not a
+   CSS filter — a filter would wreck the red and the paper grain together. */
+[data-edition='dusk'] {
+  --paper: #16150f;
+  --paper-2: #1e1c15;
+  --ink: #e8e3d5;
+  --ink-2: #b3ab99;
+  --ink-3: #837c6c;
+  --red: #e0705f;
+  --rule: #3a3629;
+  --rule-dark: #6a6355;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Paper grain. Very low opacity — at 0.06 it reads as stock, at 0.2 it reads
+   as a mistake. Fixed so it does not scroll with the content. */
+.grain {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  opacity: 0.055; mix-blend-mode: multiply;
+}
+[data-edition='dusk'] .grain { mix-blend-mode: screen; opacity: 0.04; }
+
+.sheet { position: relative; z-index: 1; width: min(1180px, 100% - 2.5rem); margin-inline: auto; padding-bottom: 5rem; }
+
+:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+h1, h2, h3, h4 { margin: 0; font-weight: 700; line-height: 1.06; letter-spacing: -0.015em; }
+p { margin: 0; }
+a { color: inherit; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+
+/* ---------- masthead ---------- */
+.masthead { padding-top: 1.6rem; }
+.eyebrow {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--ink-3);
+  padding-bottom: 0.5rem;
+}
+.title {
+  border-top: 3px solid var(--rule-dark);
+  border-bottom: 1px solid var(--rule-dark);
+  padding: 0.8rem 0 0.7rem;
+  text-align: center;
+}
+.title h1 {
+  font-size: clamp(2.2rem, 8.5vw, 5.6rem);
+  letter-spacing: 0.02em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.title .sub {
+  font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.36em;
+  text-transform: uppercase; color: var(--ink-3); margin-top: 0.55rem;
+}
+.dateline {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  border-bottom: 3px double var(--rule-dark);
+  padding: 0.45rem 0;
+  font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+.dateline .conditions { color: var(--ink); font-style: normal; }
+
+/* stepper + edition toggle live in the dateline, styled as newspaper furniture */
+.furniture { display: flex; align-items: center; gap: 0.4rem; }
+.btn {
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase;
+  background: transparent; color: var(--ink-2);
+  border: 1px solid var(--rule); border-radius: 0;
+  padding: 0.42rem 0.65rem; min-height: 32px; cursor: pointer;
+  transition: background 120ms linear, color 120ms linear;
+}
+.btn:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn[aria-pressed='true'] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn.red { color: var(--red); border-color: var(--red); }
+.btn.red:hover { background: var(--red); color: var(--paper); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn:disabled:hover { background: transparent; color: var(--ink-2); border-color: var(--rule); }
+
+/* ---------- lead ---------- */
+.lead { padding: 1.6rem 0 1.2rem; border-bottom: 1px solid var(--rule); }
+.kicker {
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.24em; text-transform: uppercase;
+  color: var(--red); margin-bottom: 0.7rem;
+}
+.lead h2 {
+  font-size: clamp(1.9rem, 5.4vw, 3.4rem);
+  line-height: 1.02; letter-spacing: -0.025em;
+  max-width: 20ch;
+}
+.standfirst {
+  margin-top: 0.85rem; font-size: 1.06rem; color: var(--ink-2);
+  max-width: 58ch; line-height: 1.45;
+}
+.leadbody { margin-top: 1rem; max-width: 62ch; }
+/* Drop cap — the one flourish this design allows itself. */
+.leadbody::first-letter {
+  float: left; font-size: 3.5em; line-height: 0.78; font-weight: 700;
+  padding: 0.06em 0.1em 0 0; color: var(--red);
+}
+.leadmeta {
+  margin-top: 1.1rem; display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center;
+  font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--ink-3);
+  text-transform: uppercase;
+}
+
+/* ---------- multi-column body ---------- */
+.columns {
+  column-count: 3; column-gap: var(--gap); column-rule: 1px solid var(--rule);
+  padding: 1.4rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+@media (max-width: 1000px) { .columns { column-count: 2; } }
+@media (max-width: 620px)  { .columns { column-count: 1; } }
+
+.sect { break-inside: avoid-column; margin-bottom: 1.5rem; }
+.sect > h3 {
+  font-family: var(--sans); font-size: 0.64rem; font-weight: 700;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  border-bottom: 2px solid var(--rule-dark);
+  padding-bottom: 0.34rem; margin-bottom: 0.7rem;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;
+}
+.sect > h3 .tally { font-family: var(--mono); font-weight: 400; color: var(--ink-3); letter-spacing: 0.06em; }
+
+.item { padding: 0.5rem 0; border-bottom: 1px dotted var(--rule); break-inside: avoid; }
+.item:last-child { border-bottom: 0; }
+.item.overdue { border-left: 2px solid var(--red); padding-left: 0.6rem; margin-left: -0.6rem; }
+.item h4 { font-size: 0.98rem; font-weight: 600; line-height: 1.28; }
+.item.done h4 { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+.item .dline {
+  font-family: var(--mono); font-size: 0.64rem; color: var(--ink-3);
+  margin-top: 0.28rem; letter-spacing: 0.03em;
+}
+.item .dline .od { color: var(--red); font-weight: 700; }
+.item .ctrl { margin-top: 0.4rem; display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+.item select {
+  font-family: var(--mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em;
+  border: 1px solid var(--rule); border-radius: 0; background: var(--paper);
+  color: var(--ink-2); padding: 0.28rem 0.3rem; min-height: 30px; cursor: pointer;
+}
+.item .kill {
+  border: 0; background: none; color: var(--ink-3); cursor: pointer;
+  font-family: var(--mono); font-size: 0.7rem; padding: 0.28rem 0.4rem; min-height: 30px;
+}
+.item .kill:hover { color: var(--red); }
+
+/* ---------- boxed features ---------- */
+.box {
+  border: 1px solid var(--rule-dark);
+  padding: 0.9rem 1rem 1rem;
+  break-inside: avoid-column;
+  margin-bottom: 1.5rem;
+  background: var(--paper-2);
+}
+.box > h3 {
+  font-family: var(--sans); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.2em; text-transform: uppercase; text-align: center;
+  border-bottom: 1px solid var(--rule-dark); padding-bottom: 0.45rem; margin-bottom: 0.7rem;
+}
+table.figures { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+table.figures th { text-align: left; font-weight: 400; color: var(--ink-2); padding: 0.26rem 0; }
+table.figures td {
+  text-align: right; padding: 0.26rem 0;
+  font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 600;
+}
+table.figures tr { border-bottom: 1px dotted var(--rule); }
+table.figures tr:last-child { border-bottom: 0; }
+table.figures td.warn { color: var(--red); }
+
+/* ---------- obituaries ---------- */
+.obit { padding: 0.55rem 0; border-bottom: 1px dotted var(--rule); }
+.obit:last-child { border-bottom: 0; }
+.obit h4 { font-size: 0.92rem; font-style: italic; font-weight: 600; }
+.obit p { font-family: var(--mono); font-size: 0.62rem; color: var(--ink-3); margin-top: 0.22rem; }
+.obit .acts { margin-top: 0.4rem; display: flex; gap: 0.35rem; }
+.obit .acts .btn { font-size: 0.58rem; padding: 0.3rem 0.5rem; min-height: 28px; }
+
+/* ---------- chart ---------- */
+.chartwrap { break-inside: avoid-column; margin-bottom: 1.5rem; }
+.chartwrap h3 {
+  font-family: var(--sans); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  border-bottom: 2px solid var(--rule-dark); padding-bottom: 0.34rem; margin-bottom: 0.7rem;
+}
+svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+svg.chart text { font-family: var(--mono); font-size: 7px; fill: var(--ink-3); letter-spacing: 0.04em; }
+svg.chart text.lbl { fill: var(--ink); font-weight: 700; }
+
+/* ---------- classified composer ---------- */
+.classified { border: 1px solid var(--rule-dark); padding: 0.9rem 1rem 1rem; margin-bottom: 1.5rem; break-inside: avoid-column; }
+.classified h3 {
+  font-family: var(--sans); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.2em;
+  text-transform: uppercase; text-align: center;
+  border-bottom: 1px solid var(--rule-dark); padding-bottom: 0.45rem; margin-bottom: 0.7rem;
+}
+.classified label { display: block; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 0.3rem; }
+.classified input, .classified select {
+  width: 100%; font-family: var(--serif); font-size: 0.92rem;
+  border: 0; border-bottom: 1px solid var(--rule-dark); border-radius: 0;
+  background: transparent; color: var(--ink); padding: 0.42rem 0; min-height: 38px;
+}
+.classified input:focus { outline: none; border-bottom-color: var(--red); }
+.classified select { font-family: var(--mono); font-size: 0.72rem; }
+.classified .row { margin-bottom: 0.7rem; }
+.classified .preview {
+  font-family: var(--mono); font-size: 0.62rem; color: var(--ink-3);
+  border-top: 1px dotted var(--rule); padding-top: 0.5rem; margin-top: 0.2rem; min-height: 2.4em;
+}
+.classified .preview b { color: var(--ink); }
+
+/* ---------- retro ---------- */
+.retro { border-top: 3px double var(--rule-dark); margin-top: 1.4rem; padding-top: 1.2rem; }
+.retro h2 { font-size: clamp(1.5rem, 3.4vw, 2.3rem); margin-bottom: 0.2rem; }
+.retro .cols { column-count: 2; column-gap: var(--gap); column-rule: 1px solid var(--rule); margin-top: 1rem; }
+@media (max-width: 620px) { .retro .cols { column-count: 1; } }
+.retro p { max-width: 60ch; margin-bottom: 0.7rem; }
+.retro .lede { font-size: 1.05rem; color: var(--ink-2); }
+
+footer.colophon {
+  border-top: 1px solid var(--rule); margin-top: 2rem; padding-top: 1rem;
+  display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+
+.lab-back {
+  font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.16em;
+  text-transform: uppercase; text-decoration: none; color: var(--ink-2);
+  border-bottom: 1px solid var(--rule-dark); padding-bottom: 1px;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Back-issue mode gets a visible watermark so nobody mistakes history for now. */
+[data-issue='past'] .sheet { position: relative; }
+[data-issue='past'] .title h1::after {
+  content: ' · ARCHIVE';
+  font-size: 0.22em; letter-spacing: 0.3em; color: var(--red); vertical-align: middle;
+}
+
+/* ---------- print ---------- */
+@media print {
+  :root { --paper: #fff; --ink: #000; --ink-2: #333; --ink-3: #666; --rule: #bbb; --rule-dark: #000; --red: #000; }
+  .grain, .furniture, .classified, .item .ctrl, .obit .acts, .lab-back { display: none !important; }
+  body { font-size: 10.5pt; }
+  .sheet { width: 100%; padding: 0; }
+  .columns { column-count: 3; }
+  .box, .sect, .chartwrap { break-inside: avoid; }
+  a[href]::after { content: ''; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<svg class="grain" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <filter id="paperGrain">
+    <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter>
+  <rect width="100%" height="100%" filter="url(#paperGrain)"/>
+</svg>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <div class="eyebrow">
+      <span>Project Tracker · Variant Lab</span>
+      <span><a class="lab-back" href="./index.html">← Back to the Lab</a></span>
+    </div>
+
+    <div class="title">
+      <h1>The Daily Ledger</h1>
+      <p class="sub">An honest account of the work</p>
+    </div>
+
+    <div class="dateline">
+      <span id="volume">—</span>
+      <span class="conditions" id="conditions">—</span>
+      <span class="furniture">
+        <button class="btn" id="prevDay" type="button" title="Previous edition">◄ Prev</button>
+        <button class="btn" id="today" type="button">Today</button>
+        <button class="btn" id="nextDay" type="button" title="Next edition">Next ►</button>
+        <button class="btn" id="retroBtn" type="button" aria-pressed="false">Weekend Retro</button>
+        <button class="btn" id="duskBtn" type="button" aria-pressed="false">Dusk</button>
+      </span>
+    </div>
+  </header>
+
+  <p class="sr-only" role="status" aria-live="polite" id="live"></p>
+
+  <section class="lead" id="lead" aria-labelledby="lead-h">
+    <p class="kicker" id="leadKicker">Leading</p>
+    <h2 id="lead-h">—</h2>
+    <p class="standfirst" id="standfirst"></p>
+    <p class="leadbody" id="leadbody"></p>
+    <div class="leadmeta" id="leadmeta"></div>
+  </section>
+
+  <div class="columns" id="columns"></div>
+
+  <section class="retro" id="retro" hidden aria-labelledby="retro-h">
+    <p class="kicker">The Weekend Retro</p>
+    <h2 id="retro-h">—</h2>
+    <p class="lede" id="retroLede"></p>
+    <div class="cols" id="retroCols"></div>
+  </section>
+
+  <footer class="colophon">
+    <span id="colophonLeft">—</span>
+    <span><button class="btn red" id="resetBtn" type="button">Reset the archive</button></span>
+  </footer>
+
+</div>
+
+<script src="_kernel.js"></script>
+<script>
+(function () {
+'use strict';
+
+var $ = function (s) { return document.querySelector(s); };
+var live = $('#live');
+
+/* View state. `offset` is how many days back the edition is; 0 is today. */
+var offset = 0;
+var showRetro = false;
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+function say(msg) { live.textContent = msg; }
+function editionTs() { return Date.now() - offset * PT.DAY; }
+
+/* ==========================================================================
+   HEADLINE ENGINE
+   Patterns are selected by CONDITION, not cycled, so the front page says
+   something true rather than something templated. Title case, under ~60 chars.
+   ========================================================================== */
+function titleCase(s) {
+  var small = /^(a|an|and|as|at|but|by|for|in|of|on|or|the|to|up|vs)$/i;
+  return s.split(' ').map(function (w, i) {
+    if (i > 0 && small.test(w)) return w.toLowerCase();
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  }).join(' ');
+}
+
+var WORDS = ['zero','one','two','three','four','five','six','seven','eight','nine','ten',
+             'eleven','twelve','thirteen','fourteen','fifteen'];
+function spell(n) { return WORDS[n] || String(n); }
+
+function headline(s, m, f, worst) {
+  // Ordered by urgency of the story. First match wins.
+  if (s.total === 0) return 'Ledger Opens With a Blank Page';
+  if (s.done === s.total) return 'Every Item Closed — Board Stands Empty';
+  if (s.overdue >= 5)
+    return titleCase(spell(s.overdue) + ' Items Now Past Due Across ' + spell(PT.projects().length) + ' Projects');
+  if (s.overdue > 0 && worst)
+    return titleCase(spell(s.overdue) + ' Overdue as ' + worst.name + ' Falls Behind');
+  if (m.trend < -0.3 && m.completed > 0)
+    return titleCase('Pace Slows to ' + m.perWeek + ' a Week');
+  if (m.trend > 0.3)
+    return titleCase('Output Climbing — ' + m.recent + ' Closed This Week');
+  if (s.pct >= 80) return titleCase('Final Stretch: ' + s.pct + ' Per Cent Complete');
+  if (f && isFinite(f.days) && f.days <= 21)
+    return titleCase('All Work Projected Clear by ' + PT.shortDate(f.date.getTime()));
+  if (s.doing > s.todo) return titleCase(spell(s.doing) + ' Items in Flight, ' + spell(s.todo) + ' Waiting');
+  return titleCase(spell(s.todo + s.doing) + ' Items Open, ' + spell(s.done) + ' Closed');
+}
+
+function conditionsLine() {
+  var ps = PT.projects();
+  if (!ps.length) return 'No projects on file';
+  var avg = ps.reduce(function (a, p) { return a + PT.health(p.id); }, 0) / ps.length;
+  var word = avg > 0.72 ? 'Clear' : avg > 0.55 ? 'Fair' : avg > 0.42 ? 'Unsettled' : 'Heavy weather';
+  var s = PT.stats();
+  return word + ' · ' + s.overdue + ' overdue · ' + s.hoursLeft + 'h outstanding';
+}
+
+/* ==========================================================================
+   RENDER
+   ========================================================================== */
+function render() {
+  var past = offset > 0;
+  document.documentElement.dataset.issue = past ? 'past' : 'now';
+
+  renderMasthead();
+  if (showRetro) { renderRetro(); $('#retro').hidden = false; }
+  else { $('#retro').hidden = true; }
+
+  if (past) renderArchive();
+  else renderLive();
+
+  $('#prevDay').disabled = offset >= 89;
+  $('#nextDay').disabled = offset <= 0;
+  $('#today').disabled = offset === 0;
+}
+
+function renderMasthead() {
+  var ps = PT.projects();
+  var earliest = ps.length ? Math.min.apply(null, ps.map(function (p) { return p.createdAt; })) : Date.now();
+  var issue = Math.max(1, Math.round((editionTs() - earliest) / PT.DAY));
+  var d = new Date(editionTs());
+
+  $('#volume').textContent = 'Vol. I · No. ' + issue;
+  $('#conditions').textContent = offset > 0
+    ? 'Archive edition — ' + offset + (offset === 1 ? ' day' : ' days') + ' ago'
+    : conditionsLine();
+
+  $('.dateline').setAttribute('aria-label', 'Edition of ' + d.toDateString());
+  $('#colophonLeft').textContent =
+    d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) +
+    ' · set from ' + PT.state.log.length + ' ledger entries';
+}
+
+/* --- today's edition ---------------------------------------------------- */
+function renderLive() {
+  var s = PT.stats();
+  var m = PT.momentum();
+  var f = PT.forecast();
+  var next = PT.nextAction();
+
+  var ps = PT.projects();
+  var worst = ps.slice().sort(function (a, b) { return PT.health(a.id) - PT.health(b.id); })[0];
+
+  /* lead story */
+  $('#leadKicker').textContent = next ? 'The One Thing' : 'Notice';
+  $('#lead-h').textContent = headline(s, m, f, worst);
+
+  if (next) {
+    var t = next.task;
+    var proj = PT.project(t.projectId);
+    $('#standfirst').textContent =
+      'Of ' + (s.todo + s.doing) + ' open items, the ledger puts this one first.';
+    $('#leadbody').innerHTML =
+      esc(t.title) + ' — filed under ' + esc(proj ? proj.name : 'no project') + ', ' +
+      esc(t.priority) + ' priority, ' + esc(t.estimate) + ' hours estimated. ' +
+      'It leads because it is ' + esc(next.why) + '. ' +
+      (next.runnerUp ? 'Next in line: ' + esc(next.runnerUp.title) + '.' : '');
+    $('#leadmeta').innerHTML =
+      '<button class="btn" id="takeOn" type="button">' +
+      (t.status === 'doing' ? 'Mark it done' : 'Take it on') + '</button>' +
+      '<span>Score ' + esc(next.score) + '</span>' +
+      '<span>' + esc(t.due ? 'Due ' + PT.relDay(t.due) : 'No date set') + '</span>';
+    $('#takeOn').addEventListener('click', function () {
+      PT.moveTask(t.id, t.status === 'doing' ? 'done' : 'doing');
+      say(t.title + (t.status === 'doing' ? ' marked done' : ' taken on'));
+    });
+  } else {
+    $('#standfirst').textContent = 'Nothing is open. The board is clear.';
+    $('#leadbody').textContent = 'File a new notice below to reopen the ledger.';
+    $('#leadmeta').innerHTML = '';
+  }
+
+  /* columns */
+  var html = '';
+  html += figuresBox(s, m, f);
+  html += classifiedBox();
+  PT.projects().forEach(function (p) { html += projectSection(p); });
+  html += chartBlock();
+  html += obituaries();
+  $('#columns').innerHTML = html;
+  wireColumns();
+}
+
+function figuresBox(s, m, f) {
+  var landing = f.done ? 'complete'
+    : !isFinite(f.days) ? 'no measurable pace'
+    : PT.shortDate(f.date.getTime());
+  var trend = m.trend > 0.15 ? 'rising' : m.trend < -0.15 ? 'falling' : 'steady';
+  return '' +
+    '<div class="box"><h3>By The Numbers</h3><table class="figures"><tbody>' +
+    row('Open items', s.todo + s.doing) +
+    row('In flight', s.doing) +
+    row('Closed', s.done + ' / ' + s.total) +
+    row('Overdue', s.overdue, s.overdue > 0) +
+    row('Hours outstanding', s.hoursLeft + 'h') +
+    row('Completion', s.pct + '%') +
+    row('Pace', m.perWeek + '/wk') +
+    row('Trend', trend, m.trend < -0.15) +
+    row('Projected clear', landing, !isFinite(f.days)) +
+    '</tbody></table></div>';
+}
+function row(k, v, warn) {
+  return '<tr><th scope="row">' + esc(k) + '</th><td class="' + (warn ? 'warn' : '') + '">' + esc(v) + '</td></tr>';
+}
+
+function projectSection(p) {
+  var open = PT.tasks({ project: p.id }).filter(function (t) { return t.status !== 'done'; });
+  var s = PT.stats(p.id);
+  var now = Date.now();
+  var body = open.length
+    ? open.sort(function (a, b) { return PT.score(b) - PT.score(a); }).map(function (t) {
+        var od = t.due && t.due < now;
+        var bits = [];
+        bits.push(t.status === 'doing' ? 'In flight' : 'Waiting');
+        bits.push(t.priority);
+        bits.push(t.estimate + 'h');
+        return '<article class="item' + (od ? ' overdue' : '') + '">' +
+          '<h4>' + esc(t.title) + '</h4>' +
+          '<p class="dline">' + esc(bits.join(' · ')) +
+            (t.due ? ' · <span class="' + (od ? 'od' : '') + '">' + esc(od ? 'OVERDUE ' + PT.relDay(t.due) : 'due ' + PT.relDay(t.due)) + '</span>' : '') +
+          '</p>' +
+          '<div class="ctrl">' +
+            '<label class="sr-only" for="st-' + t.id + '">Status for ' + esc(t.title) + '</label>' +
+            '<select id="st-' + t.id + '" data-status="' + t.id + '">' +
+              opt('todo', 'Waiting', t.status) + opt('doing', 'In flight', t.status) + opt('done', 'Closed', t.status) +
+            '</select>' +
+            '<button class="kill" data-kill="' + t.id + '" type="button" aria-label="Strike ' + esc(t.title) + ' from the record">strike</button>' +
+          '</div>' +
+        '</article>';
+      }).join('')
+    : '<p class="dline" style="padding:.5rem 0">Nothing open in this section.</p>';
+
+  return '<section class="sect">' +
+    '<h3>' + esc(p.name) + '<span class="tally">' + s.done + '/' + s.total + '</span></h3>' +
+    body + '</section>';
+}
+function opt(v, label, cur) {
+  return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + label + '</option>';
+}
+
+function classifiedBox() {
+  var ps = PT.projects();
+  return '<form class="classified" id="classified">' +
+    '<h3>Place a Notice</h3>' +
+    '<div class="row"><label for="cl-text">Copy</label>' +
+      '<input id="cl-text" type="text" placeholder="Rewrite the composer !high @fri ~4h" autocomplete="off"></div>' +
+    '<div class="row"><label for="cl-proj">Section</label>' +
+      '<select id="cl-proj">' + ps.map(function (p) { return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join('') + '</select></div>' +
+    '<p class="preview" id="cl-preview">Add <b>!high</b>, <b>@fri</b>, <b>#tag</b>, <b>~4h</b> or <b>/project</b> to set the details.</p>' +
+    '<button class="btn" type="submit" style="width:100%">Publish notice</button>' +
+  '</form>';
+}
+
+function chartBlock() {
+  var series = PT.timeline(30);
+  if (series.length < 2) return '';
+  var W = 300, H = 120, PADL = 22, PADB = 16, PADT = 8;
+  var max = Math.max(1, Math.max.apply(null, series.map(function (d) { return d.total; })));
+  var x = function (i) { return PADL + (i / (series.length - 1)) * (W - PADL - 6); };
+  var y = function (v) { return PADT + (1 - v / max) * (H - PADT - PADB); };
+
+  var open = series.map(function (d, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(d.open).toFixed(1); }).join(' ');
+  var done = series.map(function (d, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(d.done).toFixed(1); }).join(' ');
+  var last = series[series.length - 1];
+
+  var ticks = '';
+  [0, Math.round(max / 2), max].forEach(function (v) {
+    ticks += '<line x1="' + PADL + '" x2="' + (W - 6) + '" y1="' + y(v) + '" y2="' + y(v) +
+             '" stroke="var(--rule)" stroke-width="0.5"/>' +
+             '<text x="' + (PADL - 4) + '" y="' + (y(v) + 2.5) + '" text-anchor="end">' + v + '</text>';
+  });
+
+  return '<div class="chartwrap"><h3>Thirty Days of Work</h3>' +
+    '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
+      'aria-label="Open items and closed items over the last thirty days. Currently ' +
+      last.open + ' open and ' + last.done + ' closed.">' +
+      ticks +
+      '<path d="' + open + '" fill="none" stroke="var(--red)" stroke-width="1.4"/>' +
+      '<path d="' + done + '" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-dasharray="3 2"/>' +
+      '<text class="lbl" x="' + (x(series.length - 1) - 2) + '" y="' + (y(last.open) - 4) + '" text-anchor="end">open ' + last.open + '</text>' +
+      '<text class="lbl" x="' + (x(series.length - 1) - 2) + '" y="' + (y(last.done) + 9) + '" text-anchor="end">closed ' + last.done + '</text>' +
+      '<text x="' + PADL + '" y="' + (H - 3) + '">' + esc(PT.shortDate(series[0].ts)) + '</text>' +
+      '<text x="' + (W - 6) + '" y="' + (H - 3) + '" text-anchor="end">today</text>' +
+    '</svg></div>';
+}
+
+/* The joke that is also the correct UX: abandoned work is the largest hidden
+   cost in any backlog, and no tracker ever prompts you to bury it. */
+function obituaries() {
+  var dead = PT.tasks({})
+    .filter(function (t) { return t.status !== 'done' && PT.staleness(t) > 0.18; })
+    .sort(function (a, b) { return PT.staleness(b) - PT.staleness(a); })
+    .slice(0, 5);
+  if (!dead.length) return '';
+
+  return '<div class="box"><h3>In Memoriam</h3>' +
+    '<p class="dline" style="margin-bottom:.6rem">Items untouched long enough to be presumed lost.</p>' +
+    dead.map(function (t) {
+      var days = Math.floor((Date.now() - t.touchedAt) / PT.DAY);
+      var proj = PT.project(t.projectId);
+      return '<div class="obit"><h4>' + esc(t.title) + '</h4>' +
+        '<p>' + esc(proj ? proj.name : '') + ' · untouched ' + days + ' days · ' +
+        Math.round(PT.staleness(t) * 100) + '% gone</p>' +
+        '<div class="acts">' +
+          '<button class="btn" data-revive="' + t.id + '" type="button">Revive</button>' +
+          '<button class="btn red" data-letgo="' + t.id + '" type="button">Let go</button>' +
+        '</div></div>';
+    }).join('') + '</div>';
+}
+
+/* --- archive edition ----------------------------------------------------- */
+function renderArchive() {
+  var ts = editionTs();
+  var snap = PT.snapshotAt(ts);
+  var ids = Object.keys(snap);
+  var counts = { todo: 0, doing: 0, done: 0 };
+  ids.forEach(function (id) { counts[snap[id]] = (counts[snap[id]] || 0) + 1; });
+  var total = ids.length;
+  var open = counts.todo + counts.doing;
+
+  var d = PT.diff(ts - PT.DAY, ts);
+
+  $('#leadKicker').textContent = 'From the archive';
+  $('#lead-h').textContent = total === 0
+    ? 'The Ledger Had Not Yet Opened'
+    : titleCase(spell(open) + ' Items Open, ' + spell(counts.done) + ' Closed');
+  $('#standfirst').textContent =
+    'The front page as it stood on ' + new Date(ts).toDateString() + '.';
+  $('#leadbody').textContent = total === 0
+    ? 'No work had been filed by this date. Step forward to watch the ledger fill.'
+    : 'That day brought ' + d.completed.length + ' closed, ' + d.added.length + ' newly filed and ' +
+      d.started.length + ' taken on. ' +
+      (d.net > 0 ? 'A net gain of ' + d.net + '.' : d.net < 0 ? 'Scope grew by ' + Math.abs(d.net) + ' that day.' : 'A level day.');
+  $('#leadmeta').innerHTML = '<span>Reconstructed from the event log</span>';
+
+  var html = '<div class="box"><h3>That Day</h3><table class="figures"><tbody>' +
+    row('Filed', total) + row('Waiting', counts.todo) + row('In flight', counts.doing) +
+    row('Closed', counts.done) +
+    row('Closed that day', d.completed.length) + row('Newly filed', d.added.length) +
+    '</tbody></table></div>';
+
+  ['doing', 'todo', 'done'].forEach(function (st) {
+    var list = ids.filter(function (id) { return snap[id] === st; });
+    if (!list.length) return;
+    html += '<section class="sect"><h3>' +
+      (st === 'doing' ? 'In Flight' : st === 'todo' ? 'Waiting' : 'Closed') +
+      '<span class="tally">' + list.length + '</span></h3>' +
+      list.map(function (id) {
+        var t = PT.task(id);
+        return '<article class="item' + (st === 'done' ? ' done' : '') + '"><h4>' +
+          esc(t ? t.title : logTitle(id)) + '</h4>' +
+          (t ? '' : '<p class="dline">struck from the record since</p>') +
+          '</article>';
+      }).join('') + '</section>';
+  });
+
+  $('#columns').innerHTML = html;
+}
+
+function logTitle(id) {
+  var e = PT.state.log.filter(function (x) { return x.id === id && x.title; })[0];
+  return e ? e.title : 'Untitled item';
+}
+
+/* --- the weekend retro --------------------------------------------------- */
+function renderRetro() {
+  var to = editionTs();
+  var from = to - 7 * PT.DAY;
+  var d = PT.diff(from, to);
+  var m = PT.momentum(7);
+
+  var name = function (id) { var t = PT.task(id); return t ? t.title : logTitle(id); };
+
+  $('#retro-h').textContent = d.completed.length
+    ? titleCase(spell(d.completed.length) + ' Closed in Seven Days')
+    : 'A Week Without a Close';
+
+  $('#retroLede').textContent = d.net > 0
+    ? 'The week converged: ' + d.completed.length + ' closed against ' + d.added.length + ' filed.'
+    : d.net < 0
+      ? 'The week diverged. ' + d.added.length + ' items were filed and only ' + d.completed.length +
+        ' closed — scope grew faster than it was worked off.'
+      : 'A level week: as much filed as finished.';
+
+  var sect = function (title, ids, empty) {
+    return '<section class="sect"><h3>' + title + '<span class="tally">' + ids.length + '</span></h3>' +
+      (ids.length
+        ? ids.map(function (id) { return '<article class="item"><h4>' + esc(name(id)) + '</h4></article>'; }).join('')
+        : '<p class="dline" style="padding:.4rem 0">' + empty + '</p>') +
+      '</section>';
+  };
+
+  var stale = PT.tasks({})
+    .filter(function (t) { return t.status !== 'done' && PT.staleness(t) > 0.3; })
+    .slice(0, 4);
+
+  $('#retroCols').innerHTML =
+    sect('What Shipped', d.completed, 'Nothing closed this week.') +
+    sect('What Started', d.started, 'Nothing new was taken on.') +
+    sect('What Arrived', d.added, 'No new work was filed.') +
+    '<section class="sect"><h3>What Rotted<span class="tally">' + stale.length + '</span></h3>' +
+      (stale.length
+        ? stale.map(function (t) {
+            return '<article class="item"><h4>' + esc(t.title) + '</h4><p class="dline">untouched ' +
+              Math.floor((Date.now() - t.touchedAt) / PT.DAY) + ' days</p></article>';
+          }).join('')
+        : '<p class="dline" style="padding:.4rem 0">Nothing has been left to rot.</p>') +
+    '</section>' +
+    '<div class="box"><h3>The Week in Figures</h3><table class="figures"><tbody>' +
+      row('Closed', d.completed.length) + row('Filed', d.added.length) +
+      row('Taken on', d.started.length) + row('Struck', d.removed.length) +
+      row('Net', (d.net > 0 ? '+' : '') + d.net, d.net < 0) +
+      row('Pace', m.perWeek + '/wk') +
+    '</tbody></table></div>';
+}
+
+/* ==========================================================================
+   WIRING
+   ========================================================================== */
+function wireColumns() {
+  $('#columns').querySelectorAll('[data-status]').forEach(function (sel) {
+    sel.addEventListener('change', function () {
+      var t = PT.task(sel.dataset.status);
+      PT.moveTask(sel.dataset.status, sel.value);
+      say((t ? t.title : 'Item') + ' moved to ' + sel.options[sel.selectedIndex].text);
+    });
+  });
+  $('#columns').querySelectorAll('[data-kill]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var t = PT.task(b.dataset.kill);
+      PT.removeTask(b.dataset.kill);
+      say((t ? t.title : 'Item') + ' struck from the record');
+    });
+  });
+  $('#columns').querySelectorAll('[data-revive]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      // Reviving is exactly "touch it" — that is what staleness measures.
+      PT.patchTask(b.dataset.revive, { status: 'doing' });
+      say('Revived');
+    });
+  });
+  $('#columns').querySelectorAll('[data-letgo]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      PT.removeTask(b.dataset.letgo);
+      say('Let go');
+    });
+  });
+
+  var form = $('#classified');
+  if (!form) return;
+  var text = $('#cl-text'), prev = $('#cl-preview');
+
+  function preview() {
+    var v = text.value.trim();
+    if (!v) {
+      prev.innerHTML = 'Add <b>!high</b>, <b>@fri</b>, <b>#tag</b>, <b>~4h</b> or <b>/project</b> to set the details.';
+      return;
+    }
+    var p = PT.parse(v);
+    prev.innerHTML = 'Will file: <b>' + esc(p.title || '(no copy)') + '</b> · ' +
+      esc(p.priority) + ' · ' + esc(p.due ? 'due ' + PT.relDay(p.due) : 'no date') + ' · ' +
+      esc(p.estimate) + 'h · ' + esc(p.energy) +
+      (p.tags.length ? ' · #' + p.tags.map(esc).join(' #') : '') +
+      (p.projectId ? ' · ' + esc(PT.project(p.projectId).name) : '');
+  }
+  text.addEventListener('input', preview);
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = text.value.trim();
+    if (!v) return;
+    var t = PT.quickAdd(v, $('#cl-proj').value);
+    if (!t) { say('Nothing to file'); return; }
+    text.value = '';
+    say('Filed: ' + t.title);
+  });
+}
+
+$('#prevDay').addEventListener('click', function () { offset = Math.min(89, offset + 1); render(); });
+$('#nextDay').addEventListener('click', function () { offset = Math.max(0, offset - 1); render(); });
+$('#today').addEventListener('click', function () { offset = 0; render(); });
+
+$('#retroBtn').addEventListener('click', function () {
+  showRetro = !showRetro;
+  this.setAttribute('aria-pressed', String(showRetro));
+  render();
+  if (showRetro) $('#retro').scrollIntoView({ behavior: PT.reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+});
+
+$('#duskBtn').addEventListener('click', function () {
+  var dusk = document.documentElement.dataset.edition === 'dusk';
+  document.documentElement.dataset.edition = dusk ? 'day' : 'dusk';
+  this.setAttribute('aria-pressed', String(!dusk));
+  try { localStorage.setItem('pt-broadsheet-edition', dusk ? 'day' : 'dusk'); } catch (e) {}
+});
+
+$('#resetBtn').addEventListener('click', function () {
+  PT.reset();
+  offset = 0;
+  say('Archive reset to the seed dataset');
+});
+
+/* Arrow keys walk the editions — the natural gesture for a date stepper. */
+addEventListener('keydown', function (e) {
+  var ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA')) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); offset = Math.min(89, offset + 1); render(); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); offset = Math.max(0, offset - 1); render(); }
+  else if (e.key === 'Home') { e.preventDefault(); offset = 0; render(); }
+});
+
+PT.on('change', render);
+
+try {
+  if (localStorage.getItem('pt-broadsheet-edition') === 'dusk') {
+    document.documentElement.dataset.edition = 'dusk';
+    $('#duskBtn').setAttribute('aria-pressed', 'true');
+  }
+} catch (e) { /* private mode — day edition is a fine default */ }
+
+render();
+})();
+</script>
+</body>
+</html>

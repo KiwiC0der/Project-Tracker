@@ -22,6 +22,97 @@
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
+/* ============================================================================
+   THEMES
+   ----------------------------------------------------------------------------
+   Tailwind v4 compiles `bg-surface` to `var(--color-surface)`, so overriding
+   these custom properties at runtime re-themes every existing utility class
+   without touching a single component.
+
+   `original` is the palette this app shipped with and stays the default, so a
+   first paint before any preference loads looks exactly as it always did.
+   ========================================================================== */
+:root[data-theme='paper'] {
+  --color-background: #f7f4ec;
+  --color-surface: #fffdf7;
+  --color-surface-2: #efeade;
+  --color-border: #cfc7b8;
+  --color-border-soft: #ded6c6;
+  --color-foreground: #14110c;
+  --color-muted: #7d7668;
+  --color-brand: #a4291f;
+  --color-brand-soft: #c2503f;
+  --color-todo: #7d7668;
+  --color-doing: #b06d10;
+  --color-done: #3f7d55;
+  color-scheme: light;
+}
+
+:root[data-theme='newsprint'] {
+  --color-background: #0e0d09;
+  --color-surface: #16150f;
+  --color-surface-2: #1e1c15;
+  --color-border: #3a3629;
+  --color-border-soft: #2a2720;
+  --color-foreground: #e8e3d5;
+  --color-muted: #837c6c;
+  --color-brand: #e0705f;
+  --color-brand-soft: #ef8b7b;
+}
+
+:root[data-theme='blueprint'] {
+  --color-background: #061119;
+  --color-surface: #0b1a26;
+  --color-surface-2: #0f2333;
+  --color-border: #1d3f55;
+  --color-border-soft: #16303f;
+  --color-foreground: #d6ecf7;
+  --color-muted: #6d90a5;
+  --color-brand: #38bdf8;
+  --color-brand-soft: #7dd3fc;
+  --color-doing: #fbbf24;
+  --color-done: #34d399;
+}
+
+:root[data-theme='terminal'] {
+  --color-background: #050c08;
+  --color-surface: #08110b;
+  --color-surface-2: #0c1a11;
+  --color-border: #1c3a27;
+  --color-border-soft: #142b1d;
+  --color-foreground: #d8f5e2;
+  --color-muted: #5c8b6e;
+  --color-brand: #4ade80;
+  --color-brand-soft: #86efac;
+  --color-doing: #fbbf24;
+  --color-done: #4ade80;
+}
+
+/* ============================================================================
+   FONTS — system stacks only, so nothing is fetched over the network.
+   `--app-body` sets prose, `--app-ui` labels and chrome, `--app-num` figures.
+   ========================================================================== */
+:root {
+  --app-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --app-ui: var(--app-body);
+  --app-num: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+:root[data-font='editorial'] {
+  --app-body: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  --app-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+:root[data-font='mono'] {
+  --app-body: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --app-ui: var(--app-body);
+}
+
+:root[data-font='grotesk'] {
+  --app-body: 'Helvetica Neue', Helvetica, 'Arial Nova', Arial, sans-serif;
+  --app-ui: var(--app-body);
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
@@ -36,9 +127,16 @@
     margin: 0;
     background: var(--color-background);
     color: var(--color-foreground);
-    font-family: var(--font-sans);
+    font-family: var(--app-body);
     -webkit-font-smoothing: antialiased;
   }
+
+  /* Figures line up in tables and stat blocks whatever the body face is. */
+  .tabular, .num {
+    font-family: var(--app-num);
+    font-variant-numeric: tabular-nums;
+  }
+  .ui-face { font-family: var(--app-ui); }
 
   :focus-visible {
     outline: 2px solid var(--color-brand);
