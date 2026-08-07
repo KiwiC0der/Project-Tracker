@@ -433,10 +433,13 @@ function AppearanceMenu({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-haspopup="dialog"
+        // The visible label is hidden below `sm`, which would leave the button
+        // named by nothing but an icon. The name has to be independent of it.
+        aria-label={`Appearance — ${THEMES[appearance.theme]}`}
         className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:border-brand"
       >
         <Palette size={13} />
-        <span className="hidden sm:inline">{THEMES[appearance.theme]}</span>
+        <span aria-hidden="true" className="hidden sm:inline">{THEMES[appearance.theme]}</span>
       </button>
 
       {open && (

@@ -31,11 +31,24 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.1.1',
+    date: '2026-08-06',
+    title: 'Stacking order and a nameless button',
+    current: true,
+    archived: false,
+    summary:
+      'Two defects found while verifying 2.1.0 against a real browser rather than ' +
+      'against the code.',
+    changes: [
+      'Grabbing a panel after a reload raises it again — the stacking counter restarted at its floor instead of resuming above the saved values, so the panel you grabbed could sink behind others',
+      'The appearance button keeps an accessible name when its label is hidden on narrow screens',
+    ],
+  },
+  {
     version: '2.1.0',
     date: '2026-08-06',
     title: 'Tiling controls and light/dark for every theme',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'Locked mode became a tiling window manager rather than a frozen picture, ' +
       'and each of the five themes gained a light palette to go with its dark one.',

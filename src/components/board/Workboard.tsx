@@ -228,6 +228,10 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
         if (ids.length) {
           setOpen(ids)
           geoRef.current = s.geo ?? {}
+          // The stacking counter has to resume above the restored values, or
+          // the first grab after a reload assigns a z BELOW panels that were
+          // raised in an earlier session and the panel you just grabbed sinks.
+          zRef.current = Math.max(zRef.current, ...Object.values(geoRef.current).map((g) => g.z || 0))
           if (s.mode === 'locked' && s.tree) { setMode('locked'); setTree(s.tree) }
           return
         }

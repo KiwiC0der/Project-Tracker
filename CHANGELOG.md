@@ -9,6 +9,30 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.1.1] — 2026-08-06
+
+Two defects found while verifying 2.1.0 against a real browser rather than
+against the code.
+
+### Fixed
+
+- **A grabbed panel could sink.** The stacking counter restarted at its floor on
+  load instead of resuming above the restored `z` values, so the first grab after
+  a reload assigned a `z` *below* panels raised in an earlier session — the panel
+  you just picked up went behind the others. Caught by dragging a panel and
+  finding the saved `z` was 21 while another panel sat at 23.
+- **The appearance button lost its accessible name** below the `sm` breakpoint,
+  where its text label is hidden and only the icon remains. It now carries an
+  `aria-label` that does not depend on the visible label.
+
+### Verified this round
+
+All eight resize handles are grabbable from 4px inside each edge. The extreme
+corner tip is clipped by `overflow-hidden` against `rounded-xl`, which removes
+only the 0–3px pixel that the rounded corner has already visually removed.
+
+---
+
 ## [2.1.0] — 2026-08-06
 
 Locked mode became a tiling window manager rather than a frozen picture, and each
@@ -100,6 +124,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.1.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.1
 [2.1.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.0
 [2.0.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.0.0
 [1.0.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v1.0.0
