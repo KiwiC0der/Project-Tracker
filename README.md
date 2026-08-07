@@ -1,21 +1,75 @@
 # Project Tracker
 
-A project and task tracker — WebGL prism hero, real accounts, and a drag-and-drop task board.
+A project and task tracker with a tiling dashboard, ten themes, and an analytics
+layer computed from your own history.
 
-**Live:** [pt.anteneh.tech](https://pt.anteneh.tech)
+**Live:** [pt.anteneh.tech](https://pt.anteneh.tech) · **Changelog:** [CHANGELOG.md](./CHANGELOG.md)
 
 ---
 
-## Features
+## The dashboard
 
-- 🐹 Hamster-wheel loader while the session is restored
-- 🌈 WebGL prism hero with a chromatic light-ray shader
+Six panels — List, Progress, Priorities, Stale, Notes, Editor — in two layout
+modes. `Alt+Z` toggles.
+
+**Loose.** Panels float and overlap. Drag a head to move; drag any edge or corner
+to resize. `Alt`+arrow snaps a panel to that half of the board.
+
+**Locked.** Panels tile the page: nothing overlaps and the page is always full.
+Pull a gutter to re-proportion a split. Drag one panel's head onto another to
+exchange them — the ratios stay, only the contents trade. `Alt`+arrow swaps with
+the spatial neighbour.
+
+Locking preserves the arrangement you actually made. A recursive **guillotine**
+turns the floating rectangles into a real split tree, so "one tall panel beside a
+stack of three" survives. A flat list of rows cannot represent that shape and
+collapses it, which reads as the lock throwing your layout away.
+
+Geometry is stored as **fractions** of the board, never pixels, so a resize is a
+pure re-apply — opening and closing the sidebar cannot accumulate drift.
+
+## Insights
+
+[`src/lib/insights.ts`](./src/lib/insights.ts) derives everything from the task
+rows you already have:
+
+- **Momentum** — recency-weighted completion velocity, and whether it is rising
+- **Landing date** — when the open work runs out at the current pace
+- **Staleness** — how long something has gone untouched, on a `(days/21)^1.4` curve
+- **Urgency / health** — continuous fields, not buckets
+- **Do this next** — a ranked pick that returns its own reasoning, so you can
+  disagree with it
+- **Quick add** parses `!high @fri /project` out of plain text
+
+The forecast refuses to lie: with no completions on record it returns `Infinity`
+and the UI says *no pace*, rather than inventing a date.
+
+## Appearance
+
+Five theme families — Original, Paper, Newsprint, Blueprint, Terminal — each in
+light and dark, for ten palettes. Four font presets, all system faces, so nothing
+is fetched over the network. Two densities.
+
+Mode and theme are independent axes (`data-mode`, `data-theme` on `<html>`), so
+"Blueprint, but light today" is one click. Mode can follow the system and keeps up
+when the system changes. Every palette clears WCAG AA on all three surfaces.
+
+Tailwind v4 compiles `bg-surface` to `var(--color-surface)`, which is why
+overriding the custom properties re-themes every component without touching one.
+
+## Versions
+
+The sidebar's **Versions** page lists every release and will open a *running build*
+of the archived ones, not a screenshot. See [`docs/VERSIONING.md`](./docs/VERSIONING.md).
+
+## Also
+
 - 🔐 Real email + password accounts backed by Supabase
-- 📊 Dashboard with live project and task counts, plus a completion bar
-- 🗂️ Retractable sidebar — a persistent push panel on desktop, an overlay on mobile
-- ✋ Drag-and-drop task board across To do / In progress / Done
-- 🗃️ Projects and tasks persist per account, isolated by Row Level Security
-- ♿ Keyboard-operable, `inert` on the collapsed sidebar, labelled form fields
+- 🗃️ Projects and tasks isolated per account by Row Level Security
+- 🌈 WebGL prism hero and shader auth screen; hamster-wheel loader
+- 📅 Calendar, Reports and Settings, all built
+- ♿ Keyboard-operable throughout — gutters are `role="separator"` with live values,
+  panels move by keyboard, `inert` on the collapsed sidebar
 - 🐢 Honours `prefers-reduced-motion`; the shaders idle when the tab is hidden
 
 ## Design exploration
@@ -122,6 +176,9 @@ npx wrangler deploy
 Build with `.env` present — the Supabase values are baked in at build time, so
 deploying without them ships a demo-mode site.
 
+Cutting a release (tag, archive, changelog) is described in
+[`docs/VERSIONING.md`](./docs/VERSIONING.md).
+
 ---
 
 ## Scenes
@@ -136,8 +193,8 @@ Assembled from a curated component set; each scene maps to one component.
 | 4 | Dashboard | 21st.dev — Features Card |
 | 5 | Sidebar | 21st.dev — Sidebar |
 | 6 | List | 21st.dev — Interactive Logs Table |
+| 7 | Day/night switch | Uiverse.io toggle, rebuilt on the design tokens |
 
-Calendar, Reports and Settings appear in the sidebar as **Coming soon**.
-
-Component sources are credited above. Application code — scene composition, data
-layer, schema, auth flow — is original.
+Component sources are credited above. Application code — the Workboard and its
+guillotine, the insights engine, the theme system, the version archive, the data
+layer, schema and auth flow — is original.

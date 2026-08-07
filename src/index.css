@@ -23,44 +23,131 @@
 }
 
 /* ============================================================================
-   THEMES
+   THEMES — five families, each in light and dark
    ----------------------------------------------------------------------------
    Tailwind v4 compiles `bg-surface` to `var(--color-surface)`, so overriding
    these custom properties at runtime re-themes every existing utility class
    without touching a single component.
 
-   `original` is the palette this app shipped with and stays the default, so a
-   first paint before any preference loads looks exactly as it always did.
+   Two independent axes on <html>: `data-theme` picks the family (its hues and
+   its character) and `data-mode` picks light or dark. They are separate
+   because "I want Blueprint, but light today" is a real request, and folding
+   mode into the family list would need ten entries in the picker instead of
+   five plus a switch.
+
+   `data-mode` is only ever written as `light` or `dark`; "system" is resolved
+   in JS against `prefers-color-scheme`, so no palette needs an @media twin.
+
+   ORIGINAL + DARK is the @theme block above and deliberately has no rule of
+   its own: it is what the app shipped with, and the first paint before any
+   preference loads must look exactly as it always did.
+
+   `color-scheme` is set per palette, not per family — it drives the native
+   form controls, scrollbars and caret, which look broken if they disagree
+   with the page.
    ========================================================================== */
-:root[data-theme='paper'] {
+
+/* ---- ORIGINAL — the violet the app shipped with ---- */
+:root[data-theme='original'][data-mode='light'] {
+  --color-background: #f6f6fb;
+  --color-surface: #ffffff;
+  --color-surface-2: #eeeef6;
+  --color-border: #d9d9e6;
+  --color-border-soft: #e7e7f1;
+  --color-foreground: #15151d;
+  --color-muted: #5f5f6e;
+  --color-brand: #5b3df0;
+  --color-brand-soft: #7c5cff;
+  --color-todo: #6b7280;
+  --color-doing: #b45309;
+  --color-done: #047857;
+  color-scheme: light;
+}
+
+/* ---- PAPER — cream stock, red ink ---- */
+:root[data-theme='paper'][data-mode='light'] {
   --color-background: #f7f4ec;
   --color-surface: #fffdf7;
   --color-surface-2: #efeade;
   --color-border: #cfc7b8;
   --color-border-soft: #ded6c6;
   --color-foreground: #14110c;
-  --color-muted: #7d7668;
+  /* Muted carries real text — timestamps, counts, hints. Every `--color-muted`
+     here is solved to clear 4.5:1 against BOTH surface and background, which
+     is why these are not round numbers. */
+  --color-muted: #6e685c;
   --color-brand: #a4291f;
   --color-brand-soft: #c2503f;
-  --color-todo: #7d7668;
+  --color-todo: #6e685c;
   --color-doing: #b06d10;
   --color-done: #3f7d55;
   color-scheme: light;
 }
+:root[data-theme='paper'][data-mode='dark'] {
+  --color-background: #100d09;
+  --color-surface: #1a1610;
+  --color-surface-2: #241f17;
+  --color-border: #413729;
+  --color-border-soft: #2d2720;
+  --color-foreground: #f2ece0;
+  --color-muted: #9a9180;
+  --color-brand: #e0574a;
+  --color-brand-soft: #ef7b6d;
+  --color-todo: #9a9180;
+  --color-doing: #d99a2b;
+  --color-done: #6bbf8a;
+  color-scheme: dark;
+}
 
-:root[data-theme='newsprint'] {
+/* ---- NEWSPRINT — pulp stock, coral headline ---- */
+:root[data-theme='newsprint'][data-mode='light'] {
+  --color-background: #eeeae0;
+  --color-surface: #f8f6ee;
+  --color-surface-2: #e3dfd1;
+  --color-border: #c2bca8;
+  --color-border-soft: #d4cfbd;
+  --color-foreground: #191712;
+  --color-muted: #686151;
+  --color-brand: #c0432f;
+  --color-brand-soft: #d4614c;
+  --color-todo: #686151;
+  --color-doing: #a06a12;
+  --color-done: #3d7a52;
+  color-scheme: light;
+}
+:root[data-theme='newsprint'][data-mode='dark'] {
   --color-background: #0e0d09;
   --color-surface: #16150f;
   --color-surface-2: #1e1c15;
   --color-border: #3a3629;
   --color-border-soft: #2a2720;
   --color-foreground: #e8e3d5;
-  --color-muted: #837c6c;
+  --color-muted: #8c8576;
   --color-brand: #e0705f;
   --color-brand-soft: #ef8b7b;
+  --color-todo: #8c8576;
+  --color-doing: #d9a441;
+  --color-done: #6fbd88;
+  color-scheme: dark;
 }
 
-:root[data-theme='blueprint'] {
+/* ---- BLUEPRINT — drafting paper and cyanotype ---- */
+:root[data-theme='blueprint'][data-mode='light'] {
+  --color-background: #e6eef5;
+  --color-surface: #f4f8fb;
+  --color-surface-2: #d8e5ef;
+  --color-border: #a5c0d2;
+  --color-border-soft: #c1d5e2;
+  --color-foreground: #09202f;
+  --color-muted: #4b6778;
+  --color-brand: #0369a1;
+  --color-brand-soft: #0284c7;
+  --color-todo: #4b6778;
+  --color-doing: #b45309;
+  --color-done: #047857;
+  color-scheme: light;
+}
+:root[data-theme='blueprint'][data-mode='dark'] {
   --color-background: #061119;
   --color-surface: #0b1a26;
   --color-surface-2: #0f2333;
@@ -70,11 +157,29 @@
   --color-muted: #6d90a5;
   --color-brand: #38bdf8;
   --color-brand-soft: #7dd3fc;
+  --color-todo: #6d90a5;
   --color-doing: #fbbf24;
   --color-done: #34d399;
+  color-scheme: dark;
 }
 
-:root[data-theme='terminal'] {
+/* ---- TERMINAL — phosphor green ---- */
+:root[data-theme='terminal'][data-mode='light'] {
+  --color-background: #e7efe8;
+  --color-surface: #f3f8f3;
+  --color-surface-2: #dae7dd;
+  --color-border: #a6c2af;
+  --color-border-soft: #c4d9ca;
+  --color-foreground: #091a10;
+  --color-muted: #4f6959;
+  --color-brand: #157f3c;
+  --color-brand-soft: #1a9c4b;
+  --color-todo: #4f6959;
+  --color-doing: #a4610a;
+  --color-done: #157f3c;
+  color-scheme: light;
+}
+:root[data-theme='terminal'][data-mode='dark'] {
   --color-background: #050c08;
   --color-surface: #08110b;
   --color-surface-2: #0c1a11;
@@ -84,8 +189,10 @@
   --color-muted: #5c8b6e;
   --color-brand: #4ade80;
   --color-brand-soft: #86efac;
+  --color-todo: #5c8b6e;
   --color-doing: #fbbf24;
   --color-done: #4ade80;
+  color-scheme: dark;
 }
 
 /* ============================================================================
@@ -159,6 +266,116 @@
     border-radius: 999px;
   }
 }
+
+/* ============================================================================
+   DENSITY — one knob the board actually reads, rather than a stored string
+   nothing consults. Panel padding and the gap between tiles both come from it.
+   ========================================================================== */
+:root {
+  --pt-pad: 0.75rem;
+  --pt-gap: 0.5rem;
+}
+:root[data-density='compact'] {
+  --pt-pad: 0.4rem;
+  --pt-gap: 0.3rem;
+}
+.pt-pad { padding: var(--pt-pad); }
+.pt-gap { gap: var(--pt-gap); }
+
+/* ============================================================================
+   DAY / NIGHT SWITCH
+   Adapted from a Uiverse.io toggle, rebuilt on the design tokens so it takes
+   the colour of whichever theme is active instead of carrying its own.
+   ========================================================================== */
+.daynight {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 3.1rem;
+  height: 1.55rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  cursor: pointer;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+.daynight:hover { border-color: var(--color-brand); }
+
+.daynight .dn-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  display: grid;
+  place-items: center;
+  width: calc(1.55rem - 6px);
+  height: calc(1.55rem - 6px);
+  border-radius: 50%;
+  background: var(--color-brand);
+  color: var(--color-background);
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.daynight[data-on='dark'] .dn-knob { transform: translateX(1.55rem); }
+
+/* Both icons are always in the DOM and cross-fade, so the knob never lands on
+   an icon that is still mid-swap. */
+.daynight .dn-icon {
+  position: absolute;
+  transition: opacity 0.22s ease, transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.daynight[data-on='dark'] .dn-sun,
+.daynight[data-on='light'] .dn-moon { opacity: 0; transform: rotate(-90deg) scale(0.5); }
+.daynight[data-on='light'] .dn-sun,
+.daynight[data-on='dark'] .dn-moon { opacity: 1; transform: none; }
+
+/* The unlit side of the track shows the destination, faintly. */
+.daynight .dn-hint {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  color: var(--color-muted);
+  opacity: 0.55;
+  transition: opacity 0.22s ease;
+}
+.daynight .dn-hint-sun { left: 0.3rem; }
+.daynight .dn-hint-moon { right: 0.3rem; }
+.daynight[data-on='light'] .dn-hint-sun,
+.daynight[data-on='dark'] .dn-hint-moon { opacity: 0; }
+
+/* ============================================================================
+   BOARD — gutters and swap targets (locked mode)
+   ----------------------------------------------------------------------------
+   The gutter is both the rule between two tiles and the thing you pull, so the
+   ornament and the affordance are one object. The hit area is 8px wide but the
+   painted line is 2px: a 2px target is a cruel thing to ask anyone to hit.
+   ========================================================================== */
+.gut {
+  position: relative;
+  flex: 0 0 auto;
+  touch-action: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+.gut::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: var(--color-border);
+  transition: background 0.15s ease;
+}
+.gut:hover::after,
+.gut:focus-visible::after,
+.gut[data-active='true']::after { background: var(--color-brand); }
+
+.gut-v { width: 8px; cursor: col-resize; }
+.gut-v::after { top: 0; bottom: 0; left: 3px; width: 2px; }
+.gut-h { height: 8px; cursor: row-resize; }
+.gut-h::after { left: 0; right: 0; top: 3px; height: 2px; }
+
+/* Dragging a panel head over another marks where it will land. */
+.pane-lifted { opacity: 0.6; }
+.pane-target { outline: 2px dashed var(--color-brand); outline-offset: -3px; }
 
 /* ============================================================================
    SCENE 1 — Hamster Loader

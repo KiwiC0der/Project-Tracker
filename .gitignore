@@ -1,6 +1,13 @@
 node_modules/
 dist/
+dist-demo/
 .wrangler/
+
+# Archived release builds and the worktrees they are built from. Reproducible
+# from the git tags by `npm run archives`, which the build runs for you — so
+# these are output, not source. See docs/VERSIONING.md.
+public/v/
+.archive/
 
 # Never commit real credentials — .env.example is the tracked template.
 .env

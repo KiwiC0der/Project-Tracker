@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard, ListTodo, Plus, LogOut, Trash2, Loader2,
   FolderKanban, Calendar as CalIcon, BarChart3, Settings as GearIcon,
+  Sun, Moon, Monitor, Palette, History, ExternalLink, Check,
 } from 'lucide-react'
 import {
   SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter,
@@ -15,19 +16,23 @@ import {
 } from '@/lib/store'
 import * as I from '@/lib/insights'
 import {
-  THEMES, FONTS, DENSITIES, THEME_SWATCH, loadAppearance, applyAppearance,
-  type Appearance, type ThemeId, type FontId, type DensityId,
+  THEMES, THEME_NOTE, MODES, FONTS, FONT_STACK, DENSITIES, THEME_SWATCH,
+  loadAppearance, applyAppearance, resolveMode, watchSystemMode,
+  type Appearance, type ThemeId, type ModeId, type FontId, type DensityId,
+  type ResolvedMode,
 } from '@/lib/prefs'
+import { RELEASES, REPO } from '@/lib/releases'
 import { Workboard, PANELS, type PanelId } from '@/components/board/Workboard'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from '@/components/board/shared'
 
-type View = 'dashboard' | 'list' | 'calendar' | 'reports' | 'settings'
+type View = 'dashboard' | 'list' | 'calendar' | 'reports' | 'versions' | 'settings'
 
 const VIEWS: Record<View, { title: string; icon: JSX.Element }> = {
   dashboard: { title: 'Dashboard', icon: <LayoutDashboard size={16} /> },
   list: { title: 'List', icon: <ListTodo size={16} /> },
   calendar: { title: 'Calendar', icon: <CalIcon size={16} /> },
   reports: { title: 'Reports', icon: <BarChart3 size={16} /> },
+  versions: { title: 'Versions', icon: <History size={16} /> },
   settings: { title: 'Settings', icon: <GearIcon size={16} /> },
 }
 
@@ -50,6 +55,13 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
   const [appearance, setAppearance] = useState<Appearance>(() => loadAppearance())
 
   useEffect(() => { applyAppearance(appearance) }, [appearance])
+
+  /* On "system", the OS can change under us — nothing else would notice, and
+     the page would sit in yesterday's mode until a reload. */
+  useEffect(() => {
+    if (appearance.mode !== 'system') return
+    return watchSystemMode(() => applyAppearance(appearance))
+  }, [appearance])
 
   // ---- initial load -------------------------------------------------------
   useEffect(() => {
@@ -212,7 +224,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
           <SidebarGroup>
             <SidebarGroupLabel>More</SidebarGroupLabel>
             <SidebarMenu>
-              {(['calendar', 'reports', 'settings'] as View[]).map((v) => (
+              {(['calendar', 'reports', 'versions', 'settings'] as View[]).map((v) => (
                 <SidebarMenuItem key={v}>
                   <SidebarMenuButton active={view === v} onClick={() => setView(v)}>
                     {VIEWS[v].icon}{VIEWS[v].title}
@@ -271,6 +283,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               {view === 'list' && <ListView ctx={ctx} onRemoveProject={removeProject} />}
               {view === 'calendar' && <CalendarView ctx={ctx} />}
               {view === 'reports' && <ReportsView ctx={ctx} />}
+              {view === 'versions' && <VersionsView />}
               {view === 'settings' && (
                 <SettingsView appearance={appearance} onAppearance={setAppearance} ctx={ctx} />
               )}
@@ -327,7 +340,8 @@ function TopBar({
         {conditions} · {s.overdue} overdue · {s.hoursLeft}h left
       </span>
 
-      <ThemePicker appearance={appearance} onAppearance={onAppearance} />
+      <DayNightSwitch appearance={appearance} onAppearance={onAppearance} />
+      <AppearanceMenu appearance={appearance} onAppearance={onAppearance} />
 
       {!usingRealBackend && (
         <span className="rounded-full border border-brand/30 bg-brand/10 px-2 py-0.5 text-[0.6rem] font-medium">
@@ -338,48 +352,210 @@ function TopBar({
   )
 }
 
-function ThemePicker({
+/* ==========================================================================
+   APPEARANCE
+   --------------------------------------------------------------------------
+   Two controls, because there are two different jobs. Flipping day to night
+   is the thing people do daily and it gets a one-click switch. Choosing a
+   theme, a face and a density is the thing people do once, and it gets a
+   panel with room to show what each option looks like.
+   ========================================================================== */
+
+/** A three-position preference driven by a two-position switch: clicking it
+    always sets an explicit light or dark, and "System" is chosen deliberately
+    in the panel. A switch that silently meant three things would be a lie. */
+function DayNightSwitch({
   appearance, onAppearance,
 }: { appearance: Appearance; onAppearance: (a: Appearance) => void }) {
+  const now: ResolvedMode = resolveMode(appearance.mode)
+  const next: ResolvedMode = now === 'dark' ? 'light' : 'dark'
   return (
-    <div className="flex items-center gap-2">
-      <fieldset className="flex items-center rounded-md border border-border p-0.5" aria-label="Theme">
-        {(Object.keys(THEMES) as ThemeId[]).map((id) => {
-          const [bg, accent] = THEME_SWATCH[id]
-          const on = appearance.theme === id
-          return (
-            <label
-              key={id}
-              title={THEMES[id]}
-              className={`relative cursor-pointer rounded p-1 transition-colors ${on ? 'bg-surface-2' : 'hover:bg-surface-2/60'}`}
-            >
-              <input
-                type="radio" name="theme" value={id} checked={on}
-                aria-label={`${THEMES[id]} theme`}
-                onChange={() => onAppearance({ ...appearance, theme: id })}
-                className="sr-only"
-              />
-              <span
-                aria-hidden="true"
-                className="block h-3.5 w-3.5 rounded-[3px] ring-1 ring-black/30"
-                style={{ background: `linear-gradient(135deg, ${bg} 0 52%, ${accent} 52% 100%)` }}
-              />
-            </label>
-          )
-        })}
-      </fieldset>
+    <button
+      type="button"
+      data-on={now}
+      onClick={() => onAppearance({ ...appearance, mode: next })}
+      aria-label={`Switch to ${next} mode`}
+      title={`${MODES[appearance.mode]} — switch to ${next}`}
+      className="daynight"
+    >
+      <span aria-hidden="true" className="dn-hint dn-hint-sun"><Sun size={11} /></span>
+      <span aria-hidden="true" className="dn-hint dn-hint-moon"><Moon size={11} /></span>
+      <span aria-hidden="true" className="dn-knob">
+        <Sun size={11} className="dn-icon dn-sun" />
+        <Moon size={11} className="dn-icon dn-moon" />
+      </span>
+    </button>
+  )
+}
 
-      <label className="sr-only" htmlFor="font">Font</label>
-      <select
-        id="font"
-        value={appearance.font}
-        onChange={(e) => onAppearance({ ...appearance, font: e.target.value as FontId })}
-        className="num rounded-md border border-border bg-surface px-2 py-1 text-xs"
+function AppearanceMenu({
+  appearance, onAppearance,
+}: { appearance: Appearance; onAppearance: (a: Appearance) => void }) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+
+  /* The panel hangs off the right edge of its trigger, which is fine until the
+     top bar wraps on a narrow screen and the trigger lands near the left — then
+     right-aligning puts the whole panel off the left of the window. Measure and
+     nudge it back in. A fixed-position fallback is not available here: the
+     header's backdrop-blur makes it the containing block for fixed children. */
+  useLayoutEffect(() => {
+    const el = panel.current
+    if (!open || !el) return
+    el.style.transform = ''
+    const r = el.getBoundingClientRect()
+    const pad = 8
+    let dx = 0
+    if (r.right > innerWidth - pad) dx = innerWidth - pad - r.right
+    if (r.left + dx < pad) dx = pad - r.left
+    el.style.transform = dx ? `translateX(${Math.round(dx)}px)` : ''
+  }, [open])
+
+  /* A popover that outlives a click elsewhere, or Escape, is a trap. */
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    addEventListener('pointerdown', onDown)
+    addEventListener('keydown', onKey)
+    return () => { removeEventListener('pointerdown', onDown); removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const mode = resolveMode(appearance.mode)
+
+  return (
+    <div className="relative" ref={wrap}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs hover:border-brand"
       >
-        {(Object.keys(FONTS) as FontId[]).map((f) => (
-          <option key={f} value={f}>{FONTS[f]}</option>
-        ))}
-      </select>
+        <Palette size={13} />
+        <span className="hidden sm:inline">{THEMES[appearance.theme]}</span>
+      </button>
+
+      {open && (
+        <div
+          ref={panel}
+          role="dialog"
+          aria-label="Appearance"
+          className="absolute right-0 top-full z-50 mt-2 w-[19rem] max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-surface p-3 shadow-2xl"
+        >
+          <Group label="Mode">
+            <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Mode">
+              {(Object.keys(MODES) as ModeId[]).map((m) => {
+                const Icon = m === 'light' ? Sun : m === 'dark' ? Moon : Monitor
+                const on = appearance.mode === m
+                return (
+                  <button
+                    key={m} type="button" role="radio" aria-checked={on}
+                    onClick={() => onAppearance({ ...appearance, mode: m })}
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs transition-colors
+                      ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
+                  >
+                    <Icon size={13} />{MODES[m]}
+                  </button>
+                )
+              })}
+            </div>
+            {appearance.mode === 'system' && (
+              <p className="num mt-1 text-[0.62rem] text-muted">
+                Following this device — currently {mode}.
+              </p>
+            )}
+          </Group>
+
+          <Group label="Theme">
+            <div className="grid gap-1" role="radiogroup" aria-label="Theme">
+              {(Object.keys(THEMES) as ThemeId[]).map((id) => {
+                const on = appearance.theme === id
+                // Every card previews itself in the mode you are actually in,
+                // so what you see on the card is what the page becomes.
+                const [bg, surface, brand] = THEME_SWATCH[id][mode]
+                return (
+                  <button
+                    key={id} type="button" role="radio" aria-checked={on}
+                    onClick={() => onAppearance({ ...appearance, theme: id })}
+                    className={`flex items-center gap-2.5 rounded-lg border p-1.5 text-left transition-colors
+                      ${on ? 'border-brand bg-brand/10' : 'border-border hover:bg-surface-2'}`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="flex h-8 w-11 shrink-0 flex-col justify-between overflow-hidden rounded-md p-1 ring-1 ring-black/20"
+                      style={{ background: bg }}
+                    >
+                      <span className="block h-1.5 w-full rounded-[2px]" style={{ background: surface }} />
+                      <span className="block h-1.5 w-2/3 rounded-[2px]" style={{ background: brand }} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-medium">{THEMES[id]}</span>
+                      <span className="block truncate text-[0.62rem] text-muted">{THEME_NOTE[id]}</span>
+                    </span>
+                    {on && <Check size={14} className="shrink-0 text-brand" />}
+                  </button>
+                )
+              })}
+            </div>
+          </Group>
+
+          <Group label="Font">
+            <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="Font">
+              {(Object.keys(FONTS) as FontId[]).map((f) => {
+                const on = appearance.font === f
+                return (
+                  <button
+                    key={f} type="button" role="radio" aria-checked={on}
+                    onClick={() => onAppearance({ ...appearance, font: f })}
+                    // Rendered in its own face: you pick by looking, not by
+                    // guessing what "Grotesk" is going to turn out to mean.
+                    style={{ fontFamily: FONT_STACK[f] }}
+                    className={`rounded-lg border px-2 py-1.5 text-xs transition-colors
+                      ${on ? 'border-brand bg-brand/10' : 'border-border hover:bg-surface-2'}`}
+                  >
+                    {FONTS[f]}
+                  </button>
+                )
+              })}
+            </div>
+          </Group>
+
+          <Group label="Density">
+            <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Density">
+              {(Object.keys(DENSITIES) as DensityId[]).map((d) => {
+                const on = appearance.density === d
+                return (
+                  <button
+                    key={d} type="button" role="radio" aria-checked={on}
+                    onClick={() => onAppearance({ ...appearance, density: d })}
+                    className={`flex-1 rounded-md py-1 text-xs transition-colors
+                      ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
+                  >
+                    {DENSITIES[d]}
+                  </button>
+                )
+              })}
+            </div>
+          </Group>
+
+          <p className="num mt-2 border-t border-border-soft pt-2 text-[0.6rem] text-muted">
+            Stored on this device. Your tasks live in your account.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Group({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-3 last:mb-0">
+      <p className="ui-face mb-1 text-[0.6rem] font-semibold uppercase tracking-wider text-muted">{label}</p>
+      {children}
     </div>
   )
 }
@@ -577,11 +753,123 @@ function ReportsView({ ctx }: { ctx: Ctx }) {
 }
 
 /* ==========================================================================
+   VERSIONS
+   --------------------------------------------------------------------------
+   Every archived release is a real build served at /v/<version>/, so this page
+   can hand you the running thing instead of a screenshot and a description of
+   it. Older versions talk to the same Supabase project as this one — they are
+   old interfaces onto current data, not snapshots of old data.
+   ========================================================================== */
+function VersionsView() {
+  const [preview, setPreview] = useState<string | null>(null)
+
+  return (
+    <div className="mx-auto w-full max-w-4xl">
+      <div className="mb-4 border-b border-border pb-3">
+        <h2 className="text-2xl font-semibold tracking-tight">Versions</h2>
+        <p className="mt-1 text-sm text-muted">
+          Every release since the first. The archived ones are running builds — open one and
+          it works, signed in as you, against the same data.
+        </p>
+      </div>
+
+      <ol className="relative border-l border-border pl-5">
+        {RELEASES.map((r) => {
+          const href = `/v/${r.version}/`
+          return (
+            <li key={r.version} className="mb-5 last:mb-0">
+              <span
+                aria-hidden="true"
+                className={`absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-background
+                  ${r.current ? 'bg-brand' : 'bg-border'}`}
+              />
+              <div className="rounded-xl border border-border bg-surface p-4">
+                <div className="mb-1 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                  <h3 className="num text-base font-semibold">v{r.version}</h3>
+                  {r.current && (
+                    <span className="rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[0.6rem] font-medium">
+                      You are here
+                    </span>
+                  )}
+                  <span className="num text-[0.65rem] text-muted">{r.date}</span>
+                </div>
+                <p className="text-sm font-medium">{r.title}</p>
+                <p className="mt-1 text-sm text-muted">{r.summary}</p>
+
+                <ul className="mt-2.5 space-y-1">
+                  {r.changes.map((c) => (
+                    <li key={c} className="flex gap-2 text-[0.8rem] leading-snug">
+                      <span aria-hidden="true" className="text-muted">·</span>{c}
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {r.archived ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setPreview(preview === href ? null : href)}
+                        aria-expanded={preview === href}
+                        className="rounded-lg border border-brand/50 bg-brand/10 px-2.5 py-1 text-xs"
+                      >
+                        {preview === href ? 'Close preview' : 'Preview here'}
+                      </button>
+                      <a
+                        href={href} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-surface-2"
+                      >
+                        Open v{r.version}<ExternalLink size={12} />
+                      </a>
+                    </>
+                  ) : (
+                    <span className="num rounded-lg border border-border px-2.5 py-1 text-xs text-muted">
+                      Running now
+                    </span>
+                  )}
+                  <a
+                    href={`${REPO}/releases/tag/v${r.version}`} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-surface-2"
+                  >
+                    Source<ExternalLink size={12} />
+                  </a>
+                </div>
+
+                {preview === href && (
+                  <div className="mt-3 overflow-hidden rounded-lg border border-border">
+                    {/* Same origin, so it inherits the session — the preview is
+                        the actual app, not a marketing shot of it. */}
+                    <iframe
+                      src={href}
+                      title={`Project Tracker v${r.version}`}
+                      className="block h-[26rem] w-full bg-background"
+                    />
+                  </div>
+                )}
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+
+      <p className="num mt-4 text-[0.65rem] text-muted">
+        Archived builds are produced by <code>scripts/archive-version.mjs</code> from the
+        git tag, not hand-copied. Full history in{' '}
+        <a href={`${REPO}/blob/main/CHANGELOG.md`} target="_blank" rel="noreferrer" className="underline">
+          CHANGELOG.md
+        </a>.
+      </p>
+    </div>
+  )
+}
+
+/* ==========================================================================
    SETTINGS
    ========================================================================== */
 function SettingsView({
   appearance, onAppearance, ctx,
 }: { appearance: Appearance; onAppearance: (a: Appearance) => void; ctx: Ctx }) {
+  const mode = resolveMode(appearance.mode)
   const Row = ({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) => (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-soft py-3 last:border-0">
       <div><p className="text-sm">{label}</p><p className="num text-[0.65rem] text-muted">{hint}</p></div>
@@ -604,11 +892,21 @@ function SettingsView({
 
       <section className="rounded-xl border border-border bg-surface p-4">
         <h3 className="ui-face mb-1 text-[0.65rem] font-semibold uppercase tracking-wider text-muted">Appearance</h3>
+        <Row label="Mode" hint="Every theme has a light and a dark palette">
+          {(Object.keys(MODES) as ModeId[]).map((id) => {
+            const Icon = id === 'light' ? Sun : id === 'dark' ? Moon : Monitor
+            return (
+              <Chip key={id} on={appearance.mode === id} onClick={() => onAppearance({ ...appearance, mode: id })}>
+                <Icon size={12} className="mr-1.5 inline-block translate-y-[1px]" />{MODES[id]}
+              </Chip>
+            )
+          })}
+        </Row>
         <Row label="Theme" hint="Colour only — layout and spacing do not change">
           {(Object.keys(THEMES) as ThemeId[]).map((id) => (
             <Chip key={id} on={appearance.theme === id} onClick={() => onAppearance({ ...appearance, theme: id })}>
               <span className="mr-1.5 inline-block h-2.5 w-2.5 translate-y-[1px] rounded-[2px]"
-                style={{ background: `linear-gradient(135deg, ${THEME_SWATCH[id][0]} 0 52%, ${THEME_SWATCH[id][1]} 52% 100%)` }} />
+                style={{ background: `linear-gradient(135deg, ${THEME_SWATCH[id][mode][0]} 0 52%, ${THEME_SWATCH[id][mode][2]} 52% 100%)` }} />
               {THEMES[id]}
             </Chip>
           ))}
@@ -616,11 +914,11 @@ function SettingsView({
         <Row label="Font" hint="System faces only — nothing is fetched over the network">
           {(Object.keys(FONTS) as FontId[]).map((id) => (
             <Chip key={id} on={appearance.font === id} onClick={() => onAppearance({ ...appearance, font: id })}>
-              {FONTS[id]}
+              <span style={{ fontFamily: FONT_STACK[id] }}>{FONTS[id]}</span>
             </Chip>
           ))}
         </Row>
-        <Row label="Density" hint="Tighter rows on the board">
+        <Row label="Density" hint="Panel padding and the gap between tiles">
           {(Object.keys(DENSITIES) as DensityId[]).map((id) => (
             <Chip key={id} on={appearance.density === id} onClick={() => onAppearance({ ...appearance, density: id })}>
               {DENSITIES[id]}

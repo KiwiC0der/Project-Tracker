@@ -16,6 +16,12 @@ import { BoardColumns, QuickAdd, Burndown, type Ctx } from './shared'
 
    Geometry is stored as FRACTIONS of the board, never pixels: a resize is then
    a pure re-apply, and repeatedly opening the sidebar cannot accumulate drift.
+
+   BOTH modes are manipulable. Locked is a tiling window manager, not a frozen
+   picture: pull a gutter to re-proportion a split, drag one panel's head onto
+   another to exchange them, or do either from the keyboard. Only the geometry
+   model differs — loose moves rectangles, locked moves ratios inside a tree,
+   which is what keeps the page full and overlap-free by construction.
    ========================================================================== */
 
 export type PanelId = 'list' | 'progress' | 'priorities' | 'stale' | 'notes' | 'editor'
@@ -98,6 +104,103 @@ function dropLeaf(n: Tree, id: PanelId): Tree | null {
   if (!a) return b
   if (!b) return a
   return { ...n, a, b }
+}
+
+/** The leaf NODE, not a copy — callers exchange `.leaf` in place so a swap
+    keeps every ratio in the tree exactly where it was. */
+function findLeaf(n: Tree, id: PanelId): { leaf: PanelId } | null {
+  if ('leaf' in n) return n.leaf === id ? n : null
+  return findLeaf(n.a, id) ?? findLeaf(n.b, id)
+}
+
+/* ============================================================================
+   SPLIT — one node of the locked tree, with the gutter that re-proportions it.
+
+   Defined at module level, never inside the parent's render: a component
+   declared inside a render is a new type on every pass, so React would unmount
+   and rebuild it — and a gutter that remounts mid-drag drops the pointer
+   capture and the drag dies on the first move.
+
+   The drag writes `flex` straight onto the two slot elements and mutates
+   `node.ratio` in place, rather than going through state on every pointermove.
+   Sixty setState calls a second would re-render every panel body — the task
+   list, the burndown, the editor — to move a divider. State is reconciled once
+   on pointerup, when the parent clones the root to publish the new ratios.
+   ========================================================================== */
+interface SplitNode { dir: 'row' | 'col'; ratio: number; a: Tree; b: Tree }
+
+function Split({ node, onCommit, a, b }: {
+  node: SplitNode
+  onCommit: () => void
+  a: JSX.Element
+  b: JSX.Element
+}) {
+  const aRef = useRef<HTMLDivElement>(null)
+  const bRef = useRef<HTMLDivElement>(null)
+  const gutRef = useRef<HTMLDivElement>(null)
+  const vertical = node.dir === 'row'
+
+  const put = (r: number) => {
+    node.ratio = I.clamp(r, 0.15, 0.85)
+    if (aRef.current) aRef.current.style.flex = `${node.ratio} 1 0`
+    if (bRef.current) bRef.current.style.flex = `${1 - node.ratio} 1 0`
+    gutRef.current?.setAttribute('aria-valuenow', String(Math.round(node.ratio * 100)))
+  }
+
+  const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = e.currentTarget
+    const host = g.parentElement?.getBoundingClientRect()
+    if (!host) return
+    const start = vertical ? e.clientX : e.clientY
+    const total = Math.max(1, vertical ? host.width : host.height)
+    const from = node.ratio
+    g.setPointerCapture(e.pointerId)
+    g.dataset.active = 'true'
+    e.preventDefault()
+
+    const onMove = (ev: PointerEvent) =>
+      put(from + ((vertical ? ev.clientX : ev.clientY) - start) / total)
+    const end = () => {
+      g.removeEventListener('pointermove', onMove)
+      g.removeEventListener('pointerup', end)
+      g.removeEventListener('pointercancel', end)
+      delete g.dataset.active
+      onCommit()
+    }
+    g.addEventListener('pointermove', onMove)
+    g.addEventListener('pointerup', end)
+    g.addEventListener('pointercancel', end)
+  }
+
+  const onKey = (e: React.KeyboardEvent) => {
+    const dec = vertical ? 'ArrowLeft' : 'ArrowUp'
+    const inc = vertical ? 'ArrowRight' : 'ArrowDown'
+    const step = e.key === dec ? -0.04 : e.key === inc ? 0.04 : 0
+    if (!step) return
+    e.preventDefault()
+    put(node.ratio + step)
+    onCommit()
+  }
+
+  return (
+    <div className={`flex min-h-0 min-w-0 flex-1 ${vertical ? 'flex-row' : 'flex-col'}`}>
+      <div ref={aRef} className="flex min-h-0 min-w-0" style={{ flex: `${node.ratio} 1 0` }}>{a}</div>
+      <div
+        ref={gutRef}
+        role="separator"
+        tabIndex={0}
+        aria-orientation={vertical ? 'vertical' : 'horizontal'}
+        aria-label={vertical ? 'Column width' : 'Row height'}
+        aria-valuenow={Math.round(node.ratio * 100)}
+        aria-valuemin={15}
+        aria-valuemax={85}
+        onPointerDown={onDown}
+        onKeyDown={onKey}
+        className={`gut ${vertical ? 'gut-v' : 'gut-h'}`}
+      />
+      <div ref={bRef} className="flex min-h-0 min-w-0" style={{ flex: `${1 - node.ratio} 1 0` }}>{b}</div>
+    </div>
+  )
 }
 
 /* ---------------------------------------------------------------------- */
@@ -312,6 +415,140 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     el.addEventListener('pointerup', onUp)
   }
 
+  /* ---- locked-mode manipulation -------------------------------------------
+     A tiled panel cannot be moved to arbitrary pixels without tearing a hole
+     in the page, so it moves by exchanging places with another panel. The two
+     ratios stay where they were; only the contents trade. ---------------- */
+
+  /** Published once, after a gutter drag has already mutated the tree in place
+      — a fresh root identity is all React needs to re-read it. Deliberately
+      not an updater function: an updater must be pure, and this saves. */
+  const publishTree = useCallback(() => {
+    if (!tree) return
+    const next = { ...tree }
+    setTree(next)
+    save({ tree: next })
+  }, [tree, save])
+
+  const refocus = useRef<PanelId | null>(null)
+  useEffect(() => {
+    const id = refocus.current
+    if (!id) return
+    refocus.current = null
+    boardRef.current?.querySelector<HTMLElement>(`[data-panel="${id}"] [data-head]`)?.focus()
+  })
+
+  const swap = useCallback((a: PanelId, b: PanelId) => {
+    if (a === b || !tree) return
+    const A = findLeaf(tree, a), B = findLeaf(tree, b)
+    if (!A || !B) return
+    A.leaf = b; B.leaf = a          // exchange contents, keep every ratio
+    const next = { ...tree }
+    setTree(next)
+    save({ tree: next })
+  }, [tree, save])
+
+  const paneUnder = (x: number, y: number) => {
+    let hit: HTMLElement | null = null
+    boardRef.current?.querySelectorAll<HTMLElement>('[data-panel]').forEach((p) => {
+      const r = p.getBoundingClientRect()
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) hit = p
+    })
+    return hit as HTMLElement | null
+  }
+
+  /** Nearest panel in a direction, measured off the rendered rectangles.
+      Spatial neighbours are what "move it left" means to someone looking at
+      the page; walking the tree gives surprising answers across a deep split. */
+  const neighbour = (id: PanelId, dir: 'l' | 'r' | 'u' | 'd'): PanelId | null => {
+    const me = boardRef.current?.querySelector<HTMLElement>(`[data-panel="${id}"]`)
+    if (!me) return null
+    const a = me.getBoundingClientRect()
+    const acx = a.left + a.width / 2, acy = a.top + a.height / 2
+    let best: PanelId | null = null, bestScore = Infinity
+    boardRef.current?.querySelectorAll<HTMLElement>('[data-panel]').forEach((el) => {
+      if (el === me || !el.dataset.panel) return
+      const b = el.getBoundingClientRect()
+      const dx = b.left + b.width / 2 - acx, dy = b.top + b.height / 2 - acy
+      const ok = dir === 'l' ? dx < -1 : dir === 'r' ? dx > 1 : dir === 'u' ? dy < -1 : dy > 1
+      if (!ok) return
+      const horiz = dir === 'l' || dir === 'r'
+      // Along-axis distance dominates; the cross-axis term only breaks ties.
+      const s = (horiz ? Math.abs(dx) : Math.abs(dy)) + (horiz ? Math.abs(dy) : Math.abs(dx)) * 2
+      if (s < bestScore) { bestScore = s; best = el.dataset.panel as PanelId }
+    })
+    return best
+  }
+
+  const startSwap = (id: PanelId) => (e: React.PointerEvent) => {
+    if (e.target instanceof HTMLElement && e.target.closest('button')) return
+    const head = e.currentTarget as HTMLElement
+    const pane = head.closest<HTMLElement>('[data-panel]')
+    if (!pane) return
+    head.setPointerCapture(e.pointerId)
+    let moved = false
+    const clear = () =>
+      boardRef.current?.querySelectorAll('.pane-target').forEach((p) => p.classList.remove('pane-target'))
+
+    const onMove = (ev: PointerEvent) => {
+      // A plain click must not read as a drag, so the lift waits for movement.
+      if (!moved) { moved = true; pane.classList.add('pane-lifted') }
+      clear()
+      const over = paneUnder(ev.clientX, ev.clientY)
+      if (over && over !== pane) over.classList.add('pane-target')
+    }
+    const end = (ev: PointerEvent) => {
+      head.removeEventListener('pointermove', onMove)
+      head.removeEventListener('pointerup', end)
+      head.removeEventListener('pointercancel', end)
+      pane.classList.remove('pane-lifted')
+      clear()
+      if (!moved) return
+      const over = paneUnder(ev.clientX, ev.clientY)
+      if (over && over !== pane && over.dataset.panel) {
+        refocus.current = id
+        swap(id, over.dataset.panel as PanelId)
+      }
+    }
+    head.addEventListener('pointermove', onMove)
+    head.addEventListener('pointerup', end)
+    head.addEventListener('pointercancel', end)
+  }
+
+  /* Alt+arrow means "move this panel that way" in both modes — it just means
+     something different in each, because the geometry does. Locked exchanges
+     it with its neighbour; loose snaps it to that half of the board, the way
+     a desktop window manager does. Without this the focusable head would be a
+     tab stop with nothing behind it for anyone not using a pointer. */
+  const SNAP: Record<string, [number, number, number, number]> = {
+    ArrowLeft: [0, 0, 0.5, 1], ArrowRight: [0.5, 0, 0.5, 1],
+    ArrowUp: [0, 0, 1, 0.5], ArrowDown: [0, 0.5, 1, 0.5],
+  }
+
+  const headKey = (id: PanelId) => (e: React.KeyboardEvent) => {
+    if (!e.altKey) return
+    if (mode === 'loose') {
+      const s = SNAP[e.key]
+      const g = geoRef.current[id]
+      if (!s || !g) return
+      e.preventDefault()
+      g.fx = s[0]; g.fy = s[1]; g.fw = s[2]; g.fh = s[3]; g.z = ++zRef.current
+      applyGeo(id)
+      save()
+      return
+    }
+    const dirs: Record<string, 'l' | 'r' | 'u' | 'd'> = {
+      ArrowLeft: 'l', ArrowRight: 'r', ArrowUp: 'u', ArrowDown: 'd',
+    }
+    const d = dirs[e.key]
+    if (!d) return
+    const target = neighbour(id, d)
+    if (!target) return
+    e.preventDefault()
+    refocus.current = id
+    swap(id, target)
+  }
+
   /* ---- render ---- */
   const frame = (id: PanelId, extra?: string) => (
     <section
@@ -322,8 +559,14 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
       style={mode === 'loose' ? { position: 'absolute' } : undefined}
     >
       <header
-        onPointerDown={mode === 'loose' ? startDrag(id) : undefined}
-        className={`flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2.5 ${mode === 'loose' ? 'cursor-grab active:cursor-grabbing' : ''}`}
+        data-head
+        tabIndex={0}
+        onPointerDown={mode === 'loose' ? startDrag(id) : startSwap(id)}
+        onKeyDown={headKey(id)}
+        aria-label={mode === 'loose'
+          ? `${PANELS[id].title} — drag to move`
+          : `${PANELS[id].title} — drag onto another panel to swap, or Alt with an arrow key`}
+        className="flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-surface-2 px-2.5 active:cursor-grabbing"
       >
         <h2 className="ui-face text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted">
           {PANELS[id].title}
@@ -332,7 +575,7 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
         <button type="button" aria-label={`Close ${PANELS[id].title}`} onClick={() => closePanel(id)}
           className="rounded px-1 text-muted hover:bg-brand/20 hover:text-foreground">✕</button>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="pt-pad min-h-0 flex-1 overflow-auto">
         <PanelBody id={id} ctx={ctx} />
       </div>
       {mode === 'loose' && ['n','s','e','w','nw','ne','sw','se'].map((d) => (
@@ -347,10 +590,13 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
   const renderTree = (n: Tree, key = 'r'): JSX.Element => {
     if ('leaf' in n) return frame(n.leaf, 'flex-1')
     return (
-      <div key={key} className={`flex min-h-0 min-w-0 flex-1 gap-2 ${n.dir === 'row' ? 'flex-row' : 'flex-col'}`}>
-        <div className="flex min-h-0 min-w-0" style={{ flex: `${n.ratio} 1 0` }}>{renderTree(n.a, key + 'a')}</div>
-        <div className="flex min-h-0 min-w-0" style={{ flex: `${1 - n.ratio} 1 0` }}>{renderTree(n.b, key + 'b')}</div>
-      </div>
+      <Split
+        key={key}
+        node={n}
+        onCommit={publishTree}
+        a={renderTree(n.a, key + 'a')}
+        b={renderTree(n.b, key + 'b')}
+      />
     )
   }
 
@@ -366,7 +612,10 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
       ))}
       <span className="flex-1" />
       <span className="num hidden text-[0.62rem] text-muted md:inline">
-        {mode === 'loose' ? 'Drag edges or corners to resize' : 'Panels tile the page'} · Alt+Z toggles
+        {mode === 'loose'
+          ? 'Drag a head to move · edges and corners resize'
+          : 'Pull a gutter to resize · drag a head onto another to swap · Alt+arrows'}
+        {' · Alt+Z toggles'}
       </span>
     </div>
   )
@@ -387,8 +636,10 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
         </fieldset>
       </div>
 
+      {/* Gutters carry the space between tiles, so the container adds no gap
+          of its own — a gap plus a gutter reads as two rules, not one. */}
       <div ref={boardRef}
-        className={`relative min-h-0 flex-1 p-3 ${mode === 'locked' ? 'flex gap-2' : ''}`}>
+        className={`pt-pad relative min-h-0 flex-1 ${mode === 'locked' ? 'flex' : ''}`}>
         {mode === 'loose'
           ? open.map((id) => frame(id))
           : tree && renderTree(tree)}
