@@ -31,11 +31,29 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.2.0',
+    date: '2026-08-07',
+    title: 'Panels cast a shadow, and the selected one casts further',
+    current: true,
+    archived: false,
+    summary:
+      'Every panel sits on a hard offset shadow — no blur, like print ' +
+      'mis-registration. Selection is carried by the same object: the panel you ' +
+      'are working in throws a longer, heavier cast than the rest.',
+    changes: [
+      'Hard offset cast shadow on every panel, in both loose and locked modes',
+      'The selected panel casts at 8px instead of 4px, in a heavier tone',
+      'Touching a panel anywhere selects it; in loose mode it also comes to the front',
+      'Tabbing into a panel selects it too, so the selection is not pointer-only',
+      'Dark palettes light the plate edge rather than darkening it — black cannot cast on a near-black page',
+      'A failed pointer capture no longer aborts a drag',
+    ],
+  },
+  {
     version: '2.1.1',
     date: '2026-08-06',
     title: 'Stacking order and a nameless button',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'Two defects found while verifying 2.1.0 against a real browser rather than ' +
       'against the code.',

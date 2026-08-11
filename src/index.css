@@ -343,6 +343,53 @@
 .daynight[data-on='dark'] .dn-hint-moon { opacity: 0; }
 
 /* ============================================================================
+   PANEL DEPTH — a cast shadow, not a drop shadow
+   ----------------------------------------------------------------------------
+   A hard offset with no blur: the panel reads as a physical plate sitting above
+   the page rather than a soft UI card. Selection is carried by the same object —
+   the selected panel throws a longer, darker cast, so "which window am I in" is
+   answered by depth instead of by a highlight colour competing with the theme.
+
+   Light and dark cannot use the same colour, and this was measured rather than
+   assumed. On cream, 30% black is already a firm grey and the effect is exactly
+   the reference. On a near-black page — Terminal's background is #050c08 — a
+   black cast is *invisible*: there is nothing darker than the background to
+   cast onto. Screenshotting it made that obvious immediately.
+
+   So the dark palettes invert the physics rather than the colour: the plate is
+   lifted off the page and its edge catches light, which is a real thing a dark
+   room does. `border` at rest, `muted` when selected — both neutral. A
+   brand-coloured cast was tried and rejected: at 8px it reads as a neon glow
+   competing with the theme, not as depth.
+   ========================================================================== */
+:root {
+  --pt-cast: 4px;
+  --pt-cast-on: 8px;
+  --pt-cast-c: var(--color-border);
+  --pt-cast-c-on: var(--color-muted);
+}
+
+:root[data-mode='light'] {
+  --pt-cast-c: rgba(0, 0, 0, 0.3);
+  --pt-cast-c-on: rgba(0, 0, 0, 0.62);
+}
+
+.pane-cast {
+  box-shadow: var(--pt-cast) var(--pt-cast) 0 var(--pt-cast-c);
+  transition: box-shadow 0.18s ease;
+}
+
+/* The selected panel must also paint ABOVE its neighbours, or the longer cast
+   is drawn under the next tile and the extra weight is invisible. In loose mode
+   the inline z-index from the stacking counter takes precedence, which is
+   correct — there, selecting a panel already raises it. */
+.pane-cast[data-active='true'] {
+  position: relative;
+  z-index: 1;
+  box-shadow: var(--pt-cast-on) var(--pt-cast-on) 0 var(--pt-cast-c-on);
+}
+
+/* ============================================================================
    BOARD — gutters and swap targets (locked mode)
    ----------------------------------------------------------------------------
    The gutter is both the rule between two tiles and the thing you pull, so the

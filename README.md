@@ -28,6 +28,12 @@ collapses it, which reads as the lock throwing your layout away.
 Geometry is stored as **fractions** of the board, never pixels, so a resize is a
 pure re-apply — opening and closing the sidebar cannot accumulate drift.
 
+Every panel sits on a **hard offset shadow** — no blur, like a misregistered
+print. Selection rides the same object: touch a panel anywhere and it throws a
+longer, heavier cast than the rest (and, in loose mode, comes to the front). On
+light palettes the cast is black; on dark ones it lights the plate edge instead,
+because there is nothing darker than a `#050c08` page to cast onto.
+
 ## Insights
 
 [`src/lib/insights.ts`](./src/lib/insights.ts) derives everything from the task

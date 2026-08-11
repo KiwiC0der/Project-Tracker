@@ -9,6 +9,43 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.2.0] — 2026-08-07
+
+Panels sit on a hard offset shadow — no blur, the way a misregistered print
+does. Selection is carried by that same object rather than by a competing
+highlight colour: the panel you are working in throws a longer, heavier cast.
+
+### Added
+
+- **Cast shadow on every panel**, in both loose and locked modes. 4px at rest,
+  **8px when selected**, with a heavier tone to match.
+- **Selection.** Touching a panel anywhere selects it — the capture phase runs
+  before the header's own drag handler, so one gesture both selects and grabs.
+  In loose mode selecting also brings the panel to the front, which a window
+  manager should do and which the heavier cast would otherwise contradict.
+- Tabbing into a panel selects it too, so selection is not pointer-only.
+
+### Changed
+
+- Light and dark use different cast colours, and this was measured rather than
+  assumed. On cream, 30% black is exactly the reference. On a near-black page —
+  Terminal's background is `#050c08` — a black cast is **invisible**: there is
+  nothing darker than the background to cast onto. A screenshot made that
+  obvious in seconds. The dark palettes therefore invert the physics rather than
+  the colour: the plate is lifted and its edge catches light (`border` at rest,
+  `muted` when selected). A brand-coloured cast was tried and rejected — at 8px
+  it reads as a neon glow competing with the theme, not as depth.
+- The selected panel paints above its neighbours, or the longer cast is drawn
+  under the next tile and the extra weight is invisible.
+
+### Fixed
+
+- A failed `setPointerCapture` no longer aborts a drag. It throws when the
+  pointer is already gone; uncaught, that killed the gesture before its move
+  listeners were attached.
+
+---
+
 ## [2.1.1] — 2026-08-06
 
 Two defects found while verifying 2.1.0 against a real browser rather than
@@ -124,6 +161,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.2.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.2.0
 [2.1.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.1
 [2.1.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.0
 [2.0.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.0.0

@@ -113,6 +113,15 @@ function findLeaf(n: Tree, id: PanelId): { leaf: PanelId } | null {
   return findLeaf(n.a, id) ?? findLeaf(n.b, id)
 }
 
+/** setPointerCapture throws if the pointer is already gone — a cancelled or
+    lost pointer racing the pointerdown. Uncaught, that aborts the handler
+    before its move listeners are attached and the gesture dies silently. The
+    drag is still worth starting without capture: it just stops tracking if the
+    cursor leaves the element. */
+function capture(el: Element, id: number) {
+  try { el.setPointerCapture(id) } catch { /* proceed uncaptured */ }
+}
+
 /* ============================================================================
    SPLIT — one node of the locked tree, with the gutter that re-proportions it.
 
@@ -154,7 +163,7 @@ function Split({ node, onCommit, a, b }: {
     const start = vertical ? e.clientX : e.clientY
     const total = Math.max(1, vertical ? host.width : host.height)
     const from = node.ratio
-    g.setPointerCapture(e.pointerId)
+    capture(g, e.pointerId)
     g.dataset.active = 'true'
     e.preventDefault()
 
@@ -213,6 +222,9 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
   const [open, setOpen] = useState<PanelId[]>(DEFAULT_OPEN)
   const [mode, setMode] = useState<'loose' | 'locked'>('loose')
   const [tree, setTree] = useState<Tree | null>(null)
+  /** The panel you are working in. Drives the heavier cast shadow, and in loose
+      mode the stacking order — the selected window is the front window. */
+  const [active, setActive] = useState<PanelId | null>(null)
   const [, force] = useState(0)
   const repaint = useCallback(() => force((n) => n + 1), [])
 
@@ -366,8 +378,27 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     if (mode === 'locked' && !t) { t = { leaf: next[0] ?? 'list' } }
     setOpen(next.length ? next : ['list'])
     setTree(t)
+    // Selection cannot outlive the panel it points at, or nothing is selected
+    // and the board still says something is.
+    if (active === id) setActive(null)
     save({ open: next, tree: t })
   }
+
+  /* ---- selection --------------------------------------------------------
+     Touching a panel anywhere selects it: the capture phase runs before the
+     header's own drag handler, so one gesture both selects and grabs. Focus is
+     wired separately because tabbing into a panel is also entering it, and a
+     pointer event will never fire for that. --------------------------------- */
+  const selectPanel = useCallback((id: PanelId) => {
+    setActive(id)
+    if (mode !== 'loose') return
+    const g = geoRef.current[id]
+    // Already in front — do not churn the counter or write to storage.
+    if (!g || g.z === zRef.current) return
+    g.z = ++zRef.current
+    applyGeo(id)
+    save()
+  }, [mode, save])
 
   /* ---- drag + resize (loose only) ---- */
   const startDrag = (id: PanelId) => (e: React.PointerEvent) => {
@@ -375,10 +406,9 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     const el = e.currentTarget as HTMLElement
     const g = geoRef.current[id]
     if (!g) return
-    g.z = ++zRef.current
     const start = toPx(g)
     const px = e.clientX, py = e.clientY
-    el.setPointerCapture(e.pointerId)
+    capture(el, e.pointerId)
     const onMove = (ev: PointerEvent) =>
       commitPx(id, { x: start.x + (ev.clientX - px), y: start.y + (ev.clientY - py), w: start.w, h: start.h })
     const onUp = () => {
@@ -398,7 +428,7 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     if (!g) return
     const s = toPx(g)
     const px = e.clientX, py = e.clientY
-    el.setPointerCapture(e.pointerId)
+    capture(el, e.pointerId)
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - px, dy = ev.clientY - py
       const box = { x: s.x, y: s.y, w: s.w, h: s.h }
@@ -489,7 +519,7 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     const head = e.currentTarget as HTMLElement
     const pane = head.closest<HTMLElement>('[data-panel]')
     if (!pane) return
-    head.setPointerCapture(e.pointerId)
+    capture(head, e.pointerId)
     let moved = false
     const clear = () =>
       boardRef.current?.querySelectorAll('.pane-target').forEach((p) => p.classList.remove('pane-target'))
@@ -558,8 +588,11 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     <section
       key={id}
       data-panel={id}
+      data-active={active === id ? 'true' : undefined}
       aria-label={`${PANELS[id].title} panel`}
-      className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface ${extra ?? ''}`}
+      onPointerDownCapture={() => selectPanel(id)}
+      onFocusCapture={() => selectPanel(id)}
+      className={`pane-cast flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface ${extra ?? ''}`}
       style={mode === 'loose' ? { position: 'absolute' } : undefined}
     >
       <header
