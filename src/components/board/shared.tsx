@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { GripVertical, Pencil } from 'lucide-react'
 import * as I from '@/lib/insights'
+import * as O from '@/lib/order'
 import type { Project, Task, TaskStatus, User } from '@/lib/store'
 
 /** Everything a panel or view needs. Passed down rather than context-ed so a
@@ -11,67 +13,247 @@ export interface Ctx {
   activeProject: string | null
   selected: string | null
   setSelected: (id: string | null) => void
+  /** The task open in the edit dialog. Rendered at scene level, not in a panel. */
+  editing: string | null
+  setEditing: (id: string | null) => void
   patch: (id: string, p: Partial<Task>) => Promise<void>
   move: (id: string, s: TaskStatus) => Promise<void>
+  /** Place a task at an explicit index of a status column. */
+  reorder: (id: string, s: TaskStatus, index: number) => Promise<void>
   remove: (id: string) => Promise<void>
   add: (text: string, projectId?: string) => Promise<Task | null>
   user: User
 }
 
-export function TaskCard({ t, ctx }: { t: Task; ctx: Ctx }) {
+/* ============================================================================
+   TASK CARD
+
+   A wrapper div, not a button. The card carries three separate controls — a
+   grip, the title, and an edit pencil — and nesting buttons inside a button is
+   invalid HTML that screen readers flatten into one confusing control.
+   ========================================================================== */
+function TaskCard({
+  t, ctx, onGrab, dragging, onKey,
+}: {
+  t: Task
+  ctx: Ctx
+  onGrab: (e: React.PointerEvent, id: string) => void
+  dragging: boolean
+  onKey: (e: React.KeyboardEvent, id: string) => void
+}) {
   const od = I.isOverdue(t)
   const due = I.dueAt(t)
+  const tone = t.priority === 'high' ? 'var(--color-brand)'
+    : t.priority === 'medium' ? 'var(--color-doing)' : 'var(--color-muted)'
+
   return (
-    <button
-      type="button"
-      draggable
-      onDragStart={(e) => { e.dataTransfer.setData('text/plain', t.id); ctx.setSelected(t.id) }}
-      onClick={() => ctx.setSelected(t.id)}
-      className={`w-full cursor-grab rounded-lg border bg-background p-2.5 text-left transition-colors
+    <div
+      data-task={t.id}
+      onPointerDown={(e) => onGrab(e, t.id)}
+      className={`group/card relative flex items-start gap-1 rounded-lg border bg-background p-2.5 transition-colors
         ${ctx.selected === t.id ? 'border-brand' : 'border-border hover:border-border-soft'}
-        ${od ? 'border-l-2 border-l-brand' : ''}`}
+        ${od ? 'border-l-2 border-l-brand' : ''}
+        ${dragging ? 'pointer-events-none opacity-60' : ''}`}
     >
-      <span className={`block text-sm leading-snug ${t.status === 'done' ? 'text-muted line-through' : ''}`}>
-        {t.title}
+      {/* Touch drags start here and only here — `touch-action: none` on the
+          whole card would stop the page scrolling under a finger. */}
+      <span
+        data-grip
+        aria-hidden="true"
+        style={{ touchAction: 'none' }}
+        className="mt-0.5 shrink-0 cursor-grab text-muted opacity-0 transition-opacity group-hover/card:opacity-60 active:cursor-grabbing"
+      >
+        <GripVertical size={13} />
       </span>
-      <span className="num mt-1 block text-[0.65rem] text-muted">
-        {t.priority}
-        {due != null && (
-          <> · <span className={od ? 'font-semibold text-brand' : ''}>
-            {od ? 'overdue ' : ''}{I.relDay(due)}
-          </span></>
-        )}
-      </span>
-    </button>
+
+      <button
+        type="button"
+        onClick={() => ctx.setSelected(t.id)}
+        onDoubleClick={() => ctx.setEditing(t.id)}
+        onKeyDown={(e) => onKey(e, t.id)}
+        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight"
+        data-drag-ok
+        className="min-w-0 flex-1 cursor-grab text-left active:cursor-grabbing"
+      >
+        <span className={`block text-sm leading-snug ${t.status === 'done' ? 'text-muted line-through' : ''}`}>
+          {t.title}
+        </span>
+        <span className="num mt-1 flex items-center gap-1 text-[0.65rem] text-muted">
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full" style={{ background: tone }} />
+          {t.priority}
+          {due != null && (
+            <> · <span className={od ? 'font-semibold text-brand' : ''}>
+              {od ? 'overdue ' : ''}{I.relDay(due)}
+            </span></>
+          )}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        aria-label={`Edit ${t.title}`}
+        onClick={() => ctx.setEditing(t.id)}
+        className="shrink-0 rounded p-1 text-muted opacity-0 transition-opacity hover:bg-brand/20 hover:text-foreground focus-visible:opacity-100 group-hover/card:opacity-100"
+      >
+        <Pencil size={12} />
+      </button>
+    </div>
   )
 }
 
+/* ============================================================================
+   BOARD COLUMNS — drag to reorder within a column, or across columns.
+
+   Pointer events rather than HTML5 drag-and-drop, which does not fire on touch
+   at all, and rather than a sortable library, because Alt+arrow keyboard moves
+   are the same gesture the Workboard already uses for panels.
+
+   The drag lifts only after ~6px of travel, so a plain click still selects.
+   ========================================================================== */
+const LIFT = 6
+
+interface Drag {
+  id: string
+  from: TaskStatus
+  x0: number; y0: number
+  dx: number; dy: number
+  live: boolean
+  to: TaskStatus | null
+  index: number
+}
+
 export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) {
+  const root = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<Drag | null>(null)
+
+  /** Which column, and which slot in it, is under the pointer. Indices are
+      counted with the dragged card excluded, which is exactly the frame
+      planMove expects — "drop at 3" then means the same thing whether the task
+      came from this column or another. */
+  const targetAt = (x: number, y: number, id: string) => {
+    const cols = [...(root.current?.querySelectorAll<HTMLElement>('[data-col]') ?? [])]
+    const col = cols.find((c) => {
+      const r = c.getBoundingClientRect()
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+    })
+    if (!col) return null
+    const cards = [...col.querySelectorAll<HTMLElement>('[data-task]')].filter((c) => c.dataset.task !== id)
+    let index = cards.length
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect()
+      if (y < r.top + r.height / 2) { index = i; break }
+    }
+    return { to: col.dataset.col as TaskStatus, index }
+  }
+
+  const onGrab = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return
+    const el = e.target as HTMLElement
+    // The title is a button and covers most of the card, so it has to be
+    // draggable — only the action buttons (the pencil) block a grab.
+    if (el.closest('button') && !el.closest('[data-drag-ok]')) return
+    // Touch may only drag from the grip; a finger anywhere else is a scroll.
+    if (e.pointerType === 'touch' && !el.closest('[data-grip]')) return
+
+    const t = ctx.tasks.find((x) => x.id === id)
+    if (!t) return
+    const start: Drag = { id, from: t.status, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, live: false, to: null, index: 0 }
+    let cur = start
+
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - start.x0, dy = ev.clientY - start.y0
+      const live = cur.live || Math.hypot(dx, dy) > LIFT
+      const hit = live ? targetAt(ev.clientX, ev.clientY, id) : null
+      cur = { ...cur, dx, dy, live, to: hit?.to ?? null, index: hit?.index ?? 0 }
+      if (live) ev.preventDefault()
+      setDrag(cur)
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      removeEventListener('pointercancel', up)
+      if (cur.live) {
+        // A completed drag still emits a click. Left alone it would select the
+        // card the user was only moving, so the next one is swallowed.
+        const swallow = (ev: MouseEvent) => { ev.preventDefault(); ev.stopPropagation() }
+        addEventListener('click', swallow, { capture: true, once: true })
+        setTimeout(() => removeEventListener('click', swallow, true), 0)
+        if (cur.to) ctx.reorder(id, cur.to, cur.index)
+      }
+      setDrag(null)
+    }
+    addEventListener('pointermove', move, { passive: false })
+    addEventListener('pointerup', up)
+    addEventListener('pointercancel', up)
+  }
+
+  /* Alt+arrows: the same language the Workboard uses to move panels. Up and
+     down move within the column, left and right across columns. */
+  const onKey = (e: React.KeyboardEvent, id: string) => {
+    if (!e.altKey) return
+    const t = ctx.tasks.find((x) => x.id === id)
+    if (!t) return
+    const here = O.column(ctx.tasks, t.project_id, t.status)
+    const at = here.findIndex((x) => x.id === id)
+    const cols = I.COLUMNS.map((c) => c.id)
+    const ci = cols.indexOf(t.status)
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const to = at + (e.key === 'ArrowUp' ? -1 : 1)
+      if (to < 0 || to >= here.length) return
+      e.preventDefault()
+      ctx.reorder(id, t.status, to)
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const nc = cols[ci + (e.key === 'ArrowLeft' ? -1 : 1)]
+      if (!nc) return
+      e.preventDefault()
+      ctx.reorder(id, nc, Math.min(at, O.column(ctx.tasks, t.project_id, nc).length))
+    }
+  }
+
   return (
-    <div className={`grid gap-3 ${stacked ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'}`}>
+    <div ref={root} className={`grid gap-3 ${stacked ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'}`}>
       {I.COLUMNS.map((col) => {
-        const items = ctx.projectTasks.filter((t) => t.status === col.id)
+        const items = O.column(ctx.tasks, ctx.activeProject, col.id)
+        const rest = items.filter((t) => t.id !== drag?.id)
+        const showLine = drag?.live && drag.to === col.id
+
         return (
-          <div
-            key={col.id}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault()
-              const id = e.dataTransfer.getData('text/plain')
-              if (id) ctx.move(id, col.id)
-            }}
-            className="flex min-h-[5rem] flex-col gap-2"
-          >
+          <div key={col.id} data-col={col.id} className="flex min-h-[5rem] flex-col gap-2">
             <div className="ui-face flex items-center gap-2 border-b border-border pb-1 text-[0.65rem] font-semibold uppercase tracking-wider text-muted">
               {col.name}<span className="num ml-auto">{items.length}</span>
             </div>
-            {items.map((t) => <TaskCard key={t.id} t={t} ctx={ctx} />)}
+
+            {/* The dragged card keeps its slot in the flow — pulling it out
+                would reflow the list under the pointer mid-gesture. */}
+            {items.map((t) => {
+              const line = showLine && rest[drag!.index]?.id === t.id
+              return (
+                <div key={t.id} className="contents">
+                  {line && <Insertion />}
+                  <div
+                    style={drag?.id === t.id && drag.live
+                      ? { transform: `translate(${drag.dx}px, ${drag.dy}px)`, zIndex: 40, position: 'relative' }
+                      : undefined}
+                  >
+                    <TaskCard t={t} ctx={ctx} onGrab={onGrab} onKey={onKey} dragging={drag?.id === t.id && drag.live} />
+                  </div>
+                </div>
+              )
+            })}
+            {showLine && drag!.index >= rest.length && <Insertion />}
           </div>
         )
       })}
     </div>
   )
 }
+
+const Insertion = () => (
+  <div aria-hidden="true" className="-my-1 h-0.5 shrink-0 rounded-full bg-brand" />
+)
+
+/* ---------------------------------------------------------------------- */
 
 export function QuickAdd({ ctx, placeholder }: { ctx: Ctx; placeholder?: string }) {
   const [v, setV] = useState('')

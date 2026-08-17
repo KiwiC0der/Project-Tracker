@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as I from '@/lib/insights'
 import type { Task } from '@/lib/store'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from './shared'
+import { PriorityPicker, DatePicker } from '@/components/ui/pickers'
 
 /* ============================================================================
    WORKBOARD — two layout modes over one set of panels.
@@ -860,7 +861,7 @@ function NotesPanel({ ctx }: { ctx: Ctx }) {
 
 function EditorPanel({ ctx }: { ctx: Ctx }) {
   const t = useMemo(() => ctx.tasks.find((x) => x.id === ctx.selected) ?? null, [ctx.tasks, ctx.selected])
-  if (!t) return <p className="text-sm text-muted">Select a task in List.</p>
+  if (!t) return <p className="text-sm text-muted">Select a task in List, or press its pencil to edit it.</p>
 
   const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <label className="mb-2.5 block">
@@ -885,15 +886,16 @@ function EditorPanel({ ctx }: { ctx: Ctx }) {
           {I.COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </Field>
-      <Field label="Priority">
-        <select className={input} value={t.priority} onChange={(e) => ctx.patch(t.id, { priority: e.target.value as Task['priority'] })}>
-          {['low', 'medium', 'high'].map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-      </Field>
-      <Field label="Due">
-        <input className={input} type="date" value={t.due_date ?? ''}
-          onChange={(e) => ctx.patch(t.id, { due_date: e.target.value || null })} />
-      </Field>
+      {/* Not <label>: the pickers are buttons, and wrapping a button in a label
+          makes clicking the label fire the button twice. */}
+      <div className="mb-2.5">
+        <span className="ui-face mb-1 block text-[0.6rem] uppercase tracking-wider text-muted">Priority</span>
+        <PriorityPicker value={t.priority} onChange={(p) => ctx.patch(t.id, { priority: p })} />
+      </div>
+      <div className="mb-2.5">
+        <span className="ui-face mb-1 block text-[0.6rem] uppercase tracking-wider text-muted">Expected completion</span>
+        <DatePicker value={t.due_date} onChange={(d) => ctx.patch(t.id, { due_date: d })} />
+      </div>
       <Fig k="Staleness" v={`${Math.round(I.staleness(t) * 100)}%`} warn={I.staleness(t) > 0.4} />
       <Fig k="Rank" v={I.score(t)} />
       <Fig k="Created" v={I.shortDate(new Date(t.created_at).getTime())} />

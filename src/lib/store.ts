@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase'
+import { ORDER_STEP } from './order'
 
 // ============================================================================
 // Types — mirror supabase/schema.sql
@@ -283,6 +284,12 @@ export async function createTask(
   status: TaskStatus = 'todo',
   priority: Priority = 'medium',
 ) {
+  // Append after the last sibling on the SPARSE scale. Counting siblings would
+  // hand a new task position 3 in a column that has already been reordered to
+  // 1024, 2048, 3072 — and it would silently appear at the top.
+  const after = (siblings: Task[]) =>
+    siblings.length ? Math.max(...siblings.map((s) => s.position)) + ORDER_STEP : 0
+
   if (supabase) {
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) throw new Error('Not signed in.')
@@ -295,7 +302,7 @@ export async function createTask(
         title,
         status,
         priority,
-        position: siblings.length,
+        position: after(siblings),
       })
       .select()
       .single()
@@ -305,6 +312,7 @@ export async function createTask(
 
   const db = loadDemo()
   const siblings = db.tasks.filter((t) => t.project_id === projectId && t.status === status)
+  const now = new Date().toISOString()
   const t: Task = {
     id: uid(),
     project_id: projectId,
@@ -312,9 +320,10 @@ export async function createTask(
     notes: '',
     status,
     priority,
-    position: siblings.length,
+    position: after(siblings),
     due_date: null,
-    created_at: new Date().toISOString(),
+    created_at: now,
+    updated_at: now,
   }
   db.tasks.push(t)
   saveDemo(db)
@@ -329,7 +338,50 @@ export async function updateTask(id: string, patch: Partial<Task>) {
   }
   const db = loadDemo()
   const i = db.tasks.findIndex((t) => t.id === id)
-  if (i >= 0) db.tasks[i] = { ...db.tasks[i], ...patch }
+  // Mirrors the `tasks_touch` trigger the real backend runs.
+  if (i >= 0) db.tasks[i] = { ...db.tasks[i], ...patch, updated_at: new Date().toISOString() }
+  saveDemo(db)
+}
+
+/**
+ * Commit a reorder: the moved row, plus any rows that had to shift.
+ *
+ * Deliberately several small UPDATEs rather than one `upsert`. An upsert would
+ * be a single round trip, but it has to send every NOT NULL column — title and
+ * notes included — so a reorder would rewrite fields the user never touched and
+ * could clobber an edit made in another tab. Positions are the only thing
+ * moving here, so positions are the only thing sent.
+ *
+ * `renumber` is empty on the common path; see planMove in lib/order.
+ */
+export async function applyOrder(
+  moved: { id: string; status: TaskStatus; position: number },
+  renumber: { id: string; position: number }[] = [],
+) {
+  if (supabase) {
+    const sb = supabase          // the narrowing does not survive into the map
+    const writes = [
+      sb.from('tasks').update({ status: moved.status, position: moved.position }).eq('id', moved.id),
+      ...renumber.map((r) => sb.from('tasks').update({ position: r.position }).eq('id', r.id)),
+    ]
+    const results = await Promise.all(writes)
+    const failed = results.find((r) => r.error)
+    if (failed?.error) throw new Error(failed.error.message)
+    return
+  }
+
+  const db = loadDemo()
+  const put = (id: string, patch: Partial<Task>) => {
+    const i = db.tasks.findIndex((t) => t.id === id)
+    if (i >= 0) db.tasks[i] = { ...db.tasks[i], ...patch, updated_at: new Date().toISOString() }
+  }
+  put(moved.id, { status: moved.status, position: moved.position })
+  // Shifted rows keep their updated_at: nobody touched them, and staleness and
+  // completion dates both read that column.
+  for (const r of renumber) {
+    const i = db.tasks.findIndex((t) => t.id === r.id)
+    if (i >= 0) db.tasks[i] = { ...db.tasks[i], position: r.position }
+  }
   saveDemo(db)
 }
 

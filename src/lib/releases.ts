@@ -31,11 +31,28 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.3.0',
+    date: '2026-08-17',
+    title: 'Reorder, edit, and pick',
+    current: true,
+    archived: false,
+    summary:
+      'Tasks can be dragged into any order and edited in place. Priority and ' +
+      'expected completion get real dropdowns instead of raw form controls.',
+    changes: [
+      'Drag a task to reorder it inside a column, or across to another one',
+      'Root cause: position was never written after a task was created, so every column was in an undefined order',
+      'Alt+arrows move a task without a pointer — up and down within a column, left and right across',
+      'An edit dialog on every task: title, notes, priority, due date, status, delete',
+      'Priority dropdown, and a calendar for the expected completion date',
+      'Drag works on touch, from the grip; the old handler never fired on a phone at all',
+    ],
+  },
+  {
     version: '2.2.0',
     date: '2026-08-07',
     title: 'Panels cast a shadow, and the selected one casts further',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'Every panel sits on a hard offset shadow — no blur, like print ' +
       'mis-registration. Selection is carried by the same object: the panel you ' +

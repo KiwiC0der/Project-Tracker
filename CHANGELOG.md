@@ -9,6 +9,58 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.3.0] — 2026-08-17
+
+Tasks can be reordered, edited in place, and given a priority and a date from
+real dropdowns.
+
+### Added
+
+- **Reorder by drag** — within a column or across to another one, with an
+  insertion line showing where the task will land.
+- **Alt+arrows move a task** without a pointer: up and down within a column,
+  left and right across. The same gesture the Workboard uses for panels.
+- **Edit dialog** on every task (pencil, or double-click the title): title,
+  notes, priority, expected completion, status, delete.
+- **`PriorityPicker` and `DatePicker`** (`src/components/ui/pickers.tsx`), also
+  replacing the native `<select>` and `<input type="date">` in the Editor panel.
+- **Touch support.** The old handler used HTML5 drag-and-drop, which never fires
+  on a phone. Pointer events work everywhere; touch drags start from the grip so
+  the page can still be scrolled with a finger.
+
+### Fixed
+
+- **The root cause of the ordering bug: `position` was never written after a
+  task was created.** Every path that moved a task — drag to a column, "Mark
+  done", the editor's status control — wrote `status` and left `position`
+  alone, so tasks piled up tied at their creation number and each column
+  rendered in whatever order the backend happened to return. All placement now
+  goes through one position-assigning path, and columns sort by position with
+  `created_at` as a tiebreak for rows predating the fix.
+- **New tasks appended on the wrong scale.** `position` was the sibling count,
+  so a new task took position 3 in a column already reordered to 1024, 2048 —
+  and silently appeared at the top.
+- **Due dates could land a day early.** `toISOString().slice(0,10)` reads the
+  UTC day, so a Friday date set on Thursday evening in the Americas was stored
+  as Thursday. Dates are now built from local calendar parts.
+- Demo mode now maintains `updated_at`, mirroring the `tasks_touch` trigger, so
+  staleness and velocity mean something without a backend.
+
+### Notes
+
+Positions are **sparse** (1024 spacing), not `0..n-1`. This is load-bearing: the
+`tasks_touch` trigger bumps `updated_at` on every UPDATE, and the insights layer
+reads that column as both `touchedAt` and `doneAt`. Renumbering a whole column on
+each drop would make every shifted row look touched today — reorder Done once and
+every task in it would read as completed today, and momentum, burndown and the
+landing forecast would all report a pace that never happened.
+
+So a drop takes the integer midpoint of its neighbours and writes exactly one
+row. Measured over 200 random moves: **1.04 row-writes per move**, 3 renumbers,
+no ties or inversions.
+
+---
+
 ## [2.2.0] — 2026-08-07
 
 Panels sit on a hard offset shadow — no blur, the way a misregistered print
@@ -161,6 +213,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.3.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.2.0
 [2.1.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.1
 [2.1.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.0

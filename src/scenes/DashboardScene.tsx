@@ -11,10 +11,11 @@ import {
 } from '@/components/ui/sidebar'
 import {
   listProjects, listTasks, createProject, createTask, updateTask, deleteTask,
-  deleteProject, seedIfEmpty, signOut, usingRealBackend,
+  deleteProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
   type Project, type Task, type TaskStatus, type User,
 } from '@/lib/store'
 import * as I from '@/lib/insights'
+import * as O from '@/lib/order'
 import {
   THEMES, THEME_NOTE, MODES, FONTS, FONT_STACK, DENSITIES, THEME_SWATCH,
   loadAppearance, applyAppearance, resolveMode, watchSystemMode,
@@ -23,6 +24,7 @@ import {
 } from '@/lib/prefs'
 import { RELEASES, REPO } from '@/lib/releases'
 import { Workboard, PANELS, type PanelId } from '@/components/board/Workboard'
+import { TaskDialog } from '@/components/board/TaskDialog'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from '@/components/board/shared'
 
 type View = 'dashboard' | 'list' | 'calendar' | 'reports' | 'versions' | 'settings'
@@ -50,6 +52,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
   const [tasks, setTasks] = useState<Task[]>([])
   const [activeProject, setActiveProject] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [appearance, setAppearance] = useState<Appearance>(() => loadAppearance())
@@ -102,7 +105,42 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     }
   }, [tasks])
 
-  const move = useCallback((id: string, status: TaskStatus) => patch(id, { status }), [patch])
+  /* Placing a task is always a position write, never a status write on its own.
+     Every earlier path — drag to a column, "Mark done", the editor's status
+     control — patched status and left position untouched, so tasks piled up
+     tied at whatever number they were created with and the column's order was
+     whatever the backend happened to return. */
+  const reorder = useCallback(async (id: string, status: TaskStatus, index: number) => {
+    const t = tasks.find((x) => x.id === id)
+    if (!t) return
+    const rest = O.column(tasks, t.project_id, status).filter((x) => x.id !== id)
+    const plan = O.planMove(rest, index)
+    const prev = tasks
+    const now = new Date().toISOString()
+
+    setTasks((cur) => cur.map((x) => {
+      if (x.id === id) return { ...x, status, position: plan.position, updated_at: now }
+      const r = plan.renumber.find((q) => q.id === x.id)
+      // Shifted rows keep their updated_at: nobody touched them, and both
+      // staleness and completion dates read that column.
+      return r ? { ...x, position: r.position } : x
+    }))
+
+    try {
+      await applyOrder({ id, status, position: plan.position }, plan.renumber)
+    } catch (err) {
+      setTasks(prev)
+      setError(err instanceof Error ? err.message : 'Could not move that task.')
+    }
+  }, [tasks])
+
+  /** Status change with no opinion about where — lands at the end of the column. */
+  const move = useCallback((id: string, status: TaskStatus) => {
+    const t = tasks.find((x) => x.id === id)
+    if (!t) return Promise.resolve()
+    const rest = O.column(tasks, t.project_id, status).filter((x) => x.id !== id)
+    return reorder(id, status, rest.length)
+  }, [tasks, reorder])
 
   const remove = useCallback(async (id: string) => {
     const prev = tasks
@@ -125,7 +163,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       // Tokens the create call cannot carry are applied straight after, so
       // "@fri" in a quick-add still lands on the row.
       if (p.due) {
-        const due = new Date(p.due).toISOString().slice(0, 10)
+        const due = O.isoDay(new Date(p.due))
         await updateTask(t.id, { due_date: due })
         t.due_date = due
       }
@@ -166,7 +204,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
 
   const ctx = {
     projects, tasks, projectTasks, activeProject, selected,
-    setSelected, patch, move, remove, add, user,
+    setSelected, editing, setEditing, patch, move, reorder, remove, add, user,
   }
 
   return (
@@ -291,6 +329,10 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
           )}
         </main>
       </div>
+
+      {/* Scene level, not inside a panel: panels are overflow-hidden with their
+          own stacking contexts and would clip it. */}
+      <TaskDialog ctx={ctx} />
     </div>
   )
 }
