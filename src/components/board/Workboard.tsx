@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as I from '@/lib/insights'
 import type { Task } from '@/lib/store'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from './shared'
-import { PriorityPicker, DatePicker } from '@/components/ui/pickers'
 
 /* ============================================================================
    WORKBOARD — two layout modes over one set of panels.
@@ -25,7 +24,7 @@ import { PriorityPicker, DatePicker } from '@/components/ui/pickers'
    which is what keeps the page full and overlap-free by construction.
    ========================================================================== */
 
-export type PanelId = 'list' | 'progress' | 'priorities' | 'stale' | 'notes' | 'editor'
+export type PanelId = 'list' | 'progress' | 'priorities' | 'stale' | 'notes'
 
 export const PANELS: Record<PanelId, { title: string }> = {
   list: { title: 'List' },
@@ -33,7 +32,6 @@ export const PANELS: Record<PanelId, { title: string }> = {
   priorities: { title: 'Priorities' },
   stale: { title: 'Stale' },
   notes: { title: 'Notes' },
-  editor: { title: 'Editor' },
 }
 
 interface Geo { fx: number; fy: number; fw: number; fh: number; z: number }
@@ -102,6 +100,18 @@ const leaves = (n: Tree, out: PanelId[] = []): PanelId[] => {
 function dropLeaf(n: Tree, id: PanelId): Tree | null {
   if ('leaf' in n) return n.leaf === id ? null : n
   const a = dropLeaf(n.a, id), b = dropLeaf(n.b, id)
+  if (!a) return b
+  if (!b) return a
+  return { ...n, a, b }
+}
+
+/** Drop leaves this build no longer knows about. A saved locked tree from an
+    older version can still name a retired panel, and rendering one would read
+    PANELS[id].title off undefined and take the whole board down. The `open`
+    list was already filtered; the tree was not. */
+function pruneTree(n: Tree): Tree | null {
+  if ('leaf' in n) return n.leaf in PANELS ? n : null
+  const a = pruneTree(n.a), b = pruneTree(n.b)
   if (!a) return b
   if (!b) return a
   return { ...n, a, b }
@@ -245,7 +255,11 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
           // the first grab after a reload assigns a z BELOW panels that were
           // raised in an earlier session and the panel you just grabbed sinks.
           zRef.current = Math.max(zRef.current, ...Object.values(geoRef.current).map((g) => g.z || 0))
-          if (s.mode === 'locked' && s.tree) { setMode('locked'); setTree(s.tree) }
+          if (s.mode === 'locked' && s.tree) {
+            const t = pruneTree(s.tree)
+            setMode('locked')
+            setTree(t ?? { leaf: ids[0] })
+          }
           return
         }
       }
@@ -714,7 +728,6 @@ function PanelBody({ id, ctx }: { id: PanelId; ctx: Ctx }) {
     case 'priorities': return <PrioritiesPanel ctx={ctx} />
     case 'stale': return <StalePanel ctx={ctx} />
     case 'notes': return <NotesPanel ctx={ctx} />
-    case 'editor': return <EditorPanel ctx={ctx} />
   }
 }
 
@@ -855,54 +868,6 @@ function NotesPanel({ ctx }: { ctx: Ctx }) {
           </div>
         </div>
       ))}
-    </>
-  )
-}
-
-function EditorPanel({ ctx }: { ctx: Ctx }) {
-  const t = useMemo(() => ctx.tasks.find((x) => x.id === ctx.selected) ?? null, [ctx.tasks, ctx.selected])
-  if (!t) return <p className="text-sm text-muted">Select a task in List, or press its pencil to edit it.</p>
-
-  const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <label className="mb-2.5 block">
-      <span className="ui-face mb-1 block text-[0.6rem] uppercase tracking-wider text-muted">{label}</span>
-      {children}
-    </label>
-  )
-  const input = 'w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-brand'
-
-  return (
-    <>
-      <Field label="Title">
-        <input className={input} defaultValue={t.title} key={`${t.id}-title`}
-          onBlur={(e) => e.target.value.trim() && e.target.value !== t.title && ctx.patch(t.id, { title: e.target.value.trim() })} />
-      </Field>
-      <Field label="Notes">
-        <textarea className={`${input} min-h-[3.5rem] resize-y`} defaultValue={t.notes} key={`${t.id}-notes`}
-          onBlur={(e) => e.target.value !== t.notes && ctx.patch(t.id, { notes: e.target.value })} />
-      </Field>
-      <Field label="Status">
-        <select className={input} value={t.status} onChange={(e) => ctx.move(t.id, e.target.value as Task['status'])}>
-          {I.COLUMNS.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </Field>
-      {/* Not <label>: the pickers are buttons, and wrapping a button in a label
-          makes clicking the label fire the button twice. */}
-      <div className="mb-2.5">
-        <span className="ui-face mb-1 block text-[0.6rem] uppercase tracking-wider text-muted">Priority</span>
-        <PriorityPicker value={t.priority} onChange={(p) => ctx.patch(t.id, { priority: p })} />
-      </div>
-      <div className="mb-2.5">
-        <span className="ui-face mb-1 block text-[0.6rem] uppercase tracking-wider text-muted">Expected completion</span>
-        <DatePicker value={t.due_date} onChange={(d) => ctx.patch(t.id, { due_date: d })} />
-      </div>
-      <Fig k="Staleness" v={`${Math.round(I.staleness(t) * 100)}%`} warn={I.staleness(t) > 0.4} />
-      <Fig k="Rank" v={I.score(t)} />
-      <Fig k="Created" v={I.shortDate(new Date(t.created_at).getTime())} />
-      <button type="button" onClick={() => ctx.remove(t.id)}
-        className="mt-3 rounded-lg border border-brand/50 px-2.5 py-1 text-xs text-brand hover:bg-brand/10">
-        Delete task
-      </button>
     </>
   )
 }

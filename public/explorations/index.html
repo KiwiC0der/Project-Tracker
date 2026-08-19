@@ -33,6 +33,7 @@
   --t-compositor: #c9553f;
   --t-composingroom: #d9743f;
   --t-dashboard: #b8862f;
+  --t-variants: #d4785a;
 
   --step-0: 0.8125rem;
   --step-1: 0.9375rem;
@@ -479,6 +480,14 @@ const MATRIX = [
 /* Round two — BROADSHEET's look on WORKBENCH's mechanics, split on the one
    axis that actually matters once you fuse them: may panes overlap or not. */
 const HYBRIDS = [
+  {
+    n: '10', key: 'variants', name: 'THREE DIRECTIONS', tint: 'var(--t-variants)',
+    axis: 'Art direction, not layout',
+    thesis: 'Round three. The layout question is settled — this asks how the settled layout should LOOK. One dashboard, one set of data, three art directions on a switch: A·Console packs it into an instrument panel, B·Quiet dissolves the chrome into an editorial page, C·Signal makes it bold and tactile.',
+    signature: '<b>Nothing here changes the markup.</b> All three directions and all fifteen palettes are CSS hanging off two data attributes — which is the test. A direction that needs different HTML is a different app, not a different skin, and choosing it would mean a rewrite instead of a re-theme.',
+    best: 'Deciding the look with real data in front of you instead of a mood board.',
+    cost: 'It is a preview, not a build. The winner still has to be ported into the app.',
+  },
   {
     n: '09', key: 'dashboard', name: 'DASHBOARD', tint: 'var(--t-dashboard)',
     axis: 'Production candidate',

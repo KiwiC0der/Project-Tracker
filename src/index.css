@@ -350,9 +350,12 @@
    the selected panel throws a longer, darker cast, so "which window am I in" is
    answered by depth instead of by a highlight colour competing with the theme.
 
+   Tuned down from the first pass: 2px at rest and 5px selected, at roughly half
+   the earlier opacity. The cast should register as weight, not as an outline —
+   at 4/8px it read as a second border competing with the real one.
+
    Light and dark cannot use the same colour, and this was measured rather than
-   assumed. On cream, 30% black is already a firm grey and the effect is exactly
-   the reference. On a near-black page — Terminal's background is #050c08 — a
+   assumed. On a near-black page — Terminal's background is #050c08 — a
    black cast is *invisible*: there is nothing darker than the background to
    cast onto. Screenshotting it made that obvious immediately.
 
@@ -363,15 +366,15 @@
    competing with the theme, not as depth.
    ========================================================================== */
 :root {
-  --pt-cast: 4px;
-  --pt-cast-on: 8px;
-  --pt-cast-c: var(--color-border);
-  --pt-cast-c-on: var(--color-muted);
+  --pt-cast: 2px;
+  --pt-cast-on: 5px;
+  --pt-cast-c: var(--color-border-soft);
+  --pt-cast-c-on: var(--color-border);
 }
 
 :root[data-mode='light'] {
-  --pt-cast-c: rgba(0, 0, 0, 0.3);
-  --pt-cast-c-on: rgba(0, 0, 0, 0.62);
+  --pt-cast-c: rgba(0, 0, 0, 0.14);
+  --pt-cast-c-on: rgba(0, 0, 0, 0.34);
 }
 
 .pane-cast {

@@ -31,11 +31,26 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.4.0',
+    date: '2026-08-18',
+    title: 'Lighter shadows, one fewer panel',
+    current: true,
+    archived: false,
+    summary:
+      'The Editor panel retired now that every task has an edit dialog, and the ' +
+      'cast shadow pulled back to weight rather than outline.',
+    changes: [
+      'Editor panel removed — the pencil on any task opens a dialog that does more',
+      'Saved layouts naming a retired panel are pruned on load instead of crashing the board',
+      'Cast shadow softened: 2px at rest, 5px selected, at about half the previous opacity',
+      'Three art directions and six original palettes to try at /explorations/variants',
+    ],
+  },
+  {
     version: '2.3.0',
     date: '2026-08-17',
     title: 'Reorder, edit, and pick',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'Tasks can be dragged into any order and edited in place. Priority and ' +
       'expected completion get real dropdowns instead of raw form controls.',

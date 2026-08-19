@@ -9,6 +9,39 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.4.0] — 2026-08-18
+
+### Removed
+
+- **The Editor panel.** v2.3.0 gave every task a pencil that opens a dialog with
+  title, notes, priority, date, status and delete — strictly more than the panel
+  offered, reachable from anywhere, and not competing for board space. Keeping
+  both meant two places to edit the same task.
+
+### Fixed
+
+- **A saved layout naming a retired panel no longer takes the board down.** The
+  restore path filtered the `open` list against the panel registry but never the
+  locked tree, so a tree still holding an `editor` leaf would read `.title` off
+  `undefined` on first paint. Trees are now pruned the same way.
+
+### Changed
+
+- **Cast shadow softened** — 2px at rest and 5px selected, at roughly half the
+  earlier opacity. At 4/8px it had stopped reading as weight and started reading
+  as a second border competing with the real one.
+
+### Added
+
+- **`/explorations/variants`** — three art directions over one dashboard and one
+  set of data, plus six original palettes (Ember, Orchid, Tide, Clay, Vapor,
+  Bone) shown next to the five already shipped. Every direction and palette is
+  CSS on two data attributes over identical markup, which is the test: a
+  direction needing different HTML is a different app, not a different skin.
+  All twelve new palettes clear WCAG AA on all three surfaces.
+
+---
+
 ## [2.3.0] — 2026-08-17
 
 Tasks can be reordered, edited in place, and given a priority and a date from
@@ -213,6 +246,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.4.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.2.0
 [2.1.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.1.1

@@ -9,8 +9,8 @@ layer computed from your own history.
 
 ## The dashboard
 
-Six panels — List, Progress, Priorities, Stale, Notes, Editor — in two layout
-modes. `Alt+Z` toggles.
+Five panels — List, Progress, Priorities, Stale, Notes — in two layout modes.
+`Alt+Z` toggles.
 
 **Loose.** Panels float and overlap. Drag a head to move; drag any edge or corner
 to resize. `Alt`+arrow snaps a panel to that half of the board.
@@ -97,8 +97,8 @@ of the archived ones, not a screenshot. See [`docs/VERSIONING.md`](./docs/VERSIO
 
 ## Design exploration
 
-Nine complete redesign directions live in [`public/explorations/`](./public/explorations/) —
-runnable prototypes, not mockups. All nine share one engine
+Ten complete redesign directions live in [`public/explorations/`](./public/explorations/) —
+runnable prototypes, not mockups. All ten share one engine
 ([`_kernel.js`](./public/explorations/_kernel.js)), so they differ only in design.
 
 ```bash
@@ -116,6 +116,7 @@ npx serve .          # then open /explorations/
 | 07 | **COMPOSITOR** | Broadsheet × Workbench — panes tiled into a page, nothing overlaps |
 | 08 | **COMPOSING ROOM** | Both, on a radio — loose sheets or a locked page, switched losslessly |
 | 09 | **DASHBOARD** | The production candidate — that board inside the real app's sidebar and views |
+| 10 | **THREE DIRECTIONS** | Art direction, not layout — one dashboard, three looks, fifteen palettes |
 
 Background reading: [`docs/TEARDOWN.md`](./docs/TEARDOWN.md) audits what is here
 today; [`docs/FEATURE-VAULT.md`](./docs/FEATURE-VAULT.md) catalogues the
