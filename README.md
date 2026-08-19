@@ -128,7 +128,6 @@ decay, time travel, and an auditable "do this next".
 - Vite 6
 - Tailwind CSS v4
 - Three.js — two hand-written GLSL shader backdrops
-- dnd-kit — drag and drop
 - Supabase — Postgres + Auth
 - Cloudflare Workers — static asset hosting
 
@@ -215,8 +214,7 @@ Assembled from a curated component set; each scene maps to one component.
 | 3 | Login & Signup | 21st.dev — Modern Login & Signup |
 | 4 | Dashboard | 21st.dev — Features Card |
 | 5 | Sidebar | 21st.dev — Sidebar |
-| 6 | List | 21st.dev — Interactive Logs Table |
-| 7 | Day/night switch | Uiverse.io toggle, rebuilt on the design tokens |
+| 6 | Day/night switch | Uiverse.io toggle, rebuilt on the design tokens |
 
 Component sources are credited above. Application code — the Workboard and its
 guillotine, the insights engine, the theme system, the version archive, the data
