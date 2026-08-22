@@ -31,11 +31,29 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.5.1',
+    date: '2026-08-22',
+    title: 'Popovers escape the sidebar, and the theme list folds up',
+    current: true,
+    archived: false,
+    summary:
+      'Two reported bugs — sidebar popovers hidden behind the dashboard, and an ' +
+      'appearance panel taller than the screen — plus two data-safety fixes found ' +
+      'while looking.',
+    changes: [
+      'Sidebar + popovers now portal out of the sidebar instead of being clipped behind the dashboard',
+      'Theme is a dropdown showing the current choice, not a list of eleven running off the screen',
+      'The appearance panel can never exceed the viewport again',
+      'Escape closes one layer at a time: dropdown, then panel, never the sidebar',
+      'Notes say plainly that they live on this device only',
+      'Signing out clears the board, sidebar and notes — your theme stays',
+    ],
+  },
+  {
     version: '2.5.0',
     date: '2026-08-22',
     title: 'Six palettes, a shader button, usernames, and a sidebar that folds',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'The six palettes from the variants lab became real themes, task and project ' +
       'creation moved into dialogs, sign-in takes a username, and the sidebar groups ' +

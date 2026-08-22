@@ -9,6 +9,54 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.5.1] — 2026-08-22
+
+### Fixed
+
+- **Sidebar `+` popovers rendered behind the dashboard.** They were
+  `position: fixed` with `z-[60]` but lived inside the sidebar's subtree, and
+  `<aside>` is both `overflow: hidden` (which clips fixed descendants) and
+  `z-index: 50` (which caps everything inside it). Fixed positioning escapes
+  neither. All popovers now portal to `document.body`, following the precedent
+  already set by `CreateTaskDialog`. Regression test is `elementFromPoint` at
+  each popover's own centre — the topmost node must be inside the popover.
+- **The appearance panel was taller than the screen** — 849px in a 722px
+  viewport, overflowing by 175px with no scroll, so Density and the last themes
+  were unreachable. The theme control is now a **dropdown** showing only the
+  current theme; the panel is **353px**. It also carries a viewport-bounded
+  `max-height` so no future addition can push content off-screen again.
+- **Popover z-index had to rise to 80.** The pickers are used inside dialogs
+  that are `z-[70]` portals; once portalled to `<body>` they became siblings
+  rather than descendants, and at 60 would have rendered *behind* the dialog.
+- **Placement clamped to `innerWidth`**, which grows with a page's scrollable
+  width — so on a page with horizontal overflow, popovers were parked out in the
+  overflow region. Now clamps to `documentElement.clientWidth`.
+- **Escape could not close a nested layer.** Each popover registered its own
+  *captured* window listener, and capture fires in registration order, so the
+  outermost always won. Replaced with a single listener over a LIFO stack: one
+  Escape closes the dropdown, a second closes the panel, and neither closes the
+  sidebar.
+
+### Changed — found while looking, not reported
+
+- **Notes now say they are device-only.** They have no table and live in
+  `localStorage`, so clearing site data or opening the app elsewhere loses them.
+  Silently is the wrong way for that to happen.
+- **Signing out clears the board layout, sidebar shape and notes.** On a shared
+  machine those belong to whoever was signed in — notes especially, since a note
+  exists nowhere else. Appearance is deliberately kept: a theme describes the
+  screen, not the account.
+
+### Known, not fixed
+
+The dashboard board overflows horizontally below ~400px (`scrollWidth` 396 vs
+`clientWidth` 375). A loose panel clamps to `MIN_W` 210 while its x may reach
+`width - 90` — deliberate, so the drag head stays grabbable — and the host is
+`overflow-x: visible`. The one-line fix (`overflow-x: clip`) would change
+behaviour for deliberately-dragged panels, so it wants its own change.
+
+---
+
 ## [2.5.0] — 2026-08-22
 
 ### Added
@@ -308,6 +356,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.5.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.1
 [2.5.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.3.0

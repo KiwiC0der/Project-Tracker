@@ -883,6 +883,12 @@ function NotesPanel({ ctx }: { ctx: Ctx }) {
         placeholder="A thought about a task, a project, anything not worth filing yet…"
         className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
       />
+      {/* Notes have no table, so they cannot follow the account. Saying so is
+          not optional: without it, clearing site data or opening the app on a
+          second device silently loses work the user believed was saved. */}
+      <p className="num mt-1 text-[0.6rem] text-muted">
+        Saved on this device only — not synced to your account.
+      </p>
       <div className="mt-1.5 flex items-center gap-2">
         <button type="button" onClick={addNote}
           className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-surface-2">Add note</button>

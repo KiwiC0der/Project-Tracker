@@ -312,7 +312,36 @@ export async function signIn(username: string, password: string): Promise<AuthRe
   }
 }
 
+/**
+ * Per-device state that belongs to whoever was signed in, not to the browser.
+ *
+ * Cleared on sign-out because this app can plausibly run on a shared machine:
+ * the board arrangement and the sidebar shape are that person's working setup,
+ * and NOTES ARE THEIR CONTENT — they have no table, so a note only ever exists
+ * here (see NotesPanel). Leaving it behind means the next person at the same
+ * browser can recover it from storage.
+ *
+ * Appearance is deliberately NOT cleared: a theme describes the screen, not the
+ * account, and resetting someone's dark mode when a colleague signs out would
+ * be a bug rather than a courtesy.
+ */
+function clearDeviceState() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k === 'project-tracker-board' ||
+          k === 'project-tracker-sidebar' ||
+          k.startsWith('project-tracker-notes:')) {
+        localStorage.removeItem(k)
+      }
+    }
+  } catch {
+    /* private mode or a locked store — nothing to clear, and failing to clear
+       must never block the sign-out itself */
+  }
+}
+
 export async function signOut(): Promise<void> {
+  clearDeviceState()
   if (supabase) {
     await supabase.auth.signOut()
     return

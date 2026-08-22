@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard, ListTodo, Plus, LogOut, Trash2, Loader2,
   FolderKanban, Calendar as CalIcon, BarChart3, Settings as GearIcon,
   Sun, Moon, Monitor, Palette, History, ExternalLink, Check,
-  Pencil, Gauge, Flag, Hourglass, StickyNote,
+  Pencil, Gauge, Flag, Hourglass, StickyNote, ChevronDown,
 } from 'lucide-react'
 import {
   SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter,
   SidebarCollapsibleGroup, SidebarMenu, SidebarMenuItem,
   SidebarMenuButton, SidebarTrigger, sidebarIconButton, useSidebar,
 } from '@/components/ui/sidebar'
-import { usePopover, PANEL as POPOVER } from '@/components/ui/pickers'
+import { usePopover, PopoverPortal, pushEscape, refocus, PANEL as POPOVER } from '@/components/ui/pickers'
 import {
   listProjects, listTasks, createProject, createTask, updateTask, deleteTask,
   deleteProject, updateProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
@@ -146,6 +146,7 @@ function EntryPicker({
       </button>
 
       {open && (
+        <PopoverPortal>
         <div ref={panel} role="dialog" aria-label={`${label} items`} style={style}
           className={`${POPOVER} w-[13rem]`}>
           <p className="ui-face px-2 pb-1 pt-0.5 text-[0.58rem] uppercase tracking-wider text-muted">
@@ -169,6 +170,7 @@ function EntryPicker({
             Hiding one only removes it here.
           </p>
         </div>
+        </PopoverPortal>
       )}
     </>
   )
@@ -203,6 +205,7 @@ function ProjectPicker({
       </button>
 
       {open && (
+        <PopoverPortal>
         <div ref={panel} role="dialog" aria-label="Projects" style={style}
           className={`${POPOVER} w-[15rem]`}>
           <p className="ui-face px-2 pb-1 pt-0.5 text-[0.58rem] uppercase tracking-wider text-muted">
@@ -233,6 +236,7 @@ function ProjectPicker({
             <Plus size={14} />New project
           </button>
         </div>
+        </PopoverPortal>
       )}
     </>
   )
@@ -798,47 +802,192 @@ function DayNightSwitch({
   )
 }
 
+/* --------------------------------------------------------------------------
+   THEME SELECT — a collapsed combobox, not eleven cards
+
+   Eleven theme cards at ~46px each pushed this panel to 849px in a 722px
+   window: Density and the last few themes were simply off the bottom of the
+   screen with no way to reach them. So the list collapses to the ONE theme
+   that is currently applied — same swatch, same name, same one-line note — and
+   opens on demand.
+
+   ARIA: the collapsed control is a `combobox` with `aria-haspopup="listbox"`
+   and `aria-expanded`, named "Theme" and reading its current value from its
+   own content, so a screen reader announces the active theme without the list
+   being open. The options carry `aria-selected`.
+
+   Escape closes the LIST only. That works because the shared escape stack in
+   pickers.tsx invokes just the innermost claim: this one, pushed after the
+   appearance popover's, wins the first Escape and the popover survives it.
+   -------------------------------------------------------------------------- */
+function ThemeSwatch({ theme, mode }: { theme: ThemeId; mode: ResolvedMode }) {
+  const [bg, surface, brand] = THEME_SWATCH[theme][mode]
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-8 w-11 shrink-0 flex-col justify-between overflow-hidden rounded-md p-1 ring-1 ring-black/20"
+      style={{ background: bg }}
+    >
+      <span className="block h-1.5 w-full rounded-[2px]" style={{ background: surface }} />
+      <span className="block h-1.5 w-2/3 rounded-[2px]" style={{ background: brand }} />
+    </span>
+  )
+}
+
+function ThemeSelect({
+  value, mode, onChange,
+}: { value: ThemeId; mode: ResolvedMode; onChange: (t: ThemeId) => void }) {
+  const ids = Object.keys(THEMES) as ThemeId[]
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(() => Math.max(0, ids.indexOf(value)))
+  const btn = useRef<HTMLButtonElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const items = useRef<Array<HTMLDivElement | null>>([])
+  const uid = useId()
+
+  const shut = useCallback((back = true) => {
+    setOpen(false)
+    // rAF, not a synchronous focus(): the list unmounts on the next commit and
+    // focusing before that lands on a node about to be removed, which drops a
+    // keyboard user on <body>. Same reason usePopover does it.
+    if (back) refocus(btn.current)
+  }, [])
+
+  /* Escape belongs to this layer while it is open — see the note above. */
+  useEffect(() => {
+    if (!open) return
+    return pushEscape(() => shut())
+  }, [open, shut])
+
+  /* Opening moves focus into the list, onto the theme already in use, which is
+     also what scrolls it into view inside the panel's own scroll box. Keyed on
+     `open` alone: re-running per `active` would fight the arrow keys, which
+     move focus themselves. */
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (open && !wasOpen.current) items.current[active]?.focus()
+    wasOpen.current = open
+  }, [open, active])
+
+  const openAt = (i: number) => { setActive(i); setOpen(true) }
+  const choose = (i: number) => { onChange(ids[i]); setActive(i); shut() }
+
+  const move = (i: number) => {
+    const n = (i + ids.length) % ids.length
+    setActive(n)
+    items.current[n]?.focus()
+  }
+
+  const onListKey = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); move(active + 1); break
+      case 'ArrowUp': e.preventDefault(); move(active - 1); break
+      case 'Home': e.preventDefault(); move(0); break
+      case 'End': e.preventDefault(); move(ids.length - 1); break
+      case 'Enter':
+      case ' ': e.preventDefault(); choose(active); break
+    }
+  }
+
+  return (
+    <div
+      /* Tabbing past the last option, or clicking anywhere else in the panel,
+         leaves the list — which should close it rather than stranding an open
+         dropdown behind the rest of the controls. */
+      onBlur={(e) => {
+        const to = e.relatedTarget as Node | null
+        if (to && (list.current?.contains(to) || btn.current?.contains(to))) return
+        setOpen(false)
+      }}
+    >
+      <button
+        ref={btn}
+        type="button"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={uid + '-list'}
+        aria-label={'Theme: ' + THEMES[value]}
+        onClick={() => (open ? shut(false) : openAt(Math.max(0, ids.indexOf(value))))}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            if (!open) openAt(Math.max(0, ids.indexOf(value)))
+          }
+        }}
+        className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-background p-1.5 text-left outline-none transition-colors hover:border-brand focus-visible:border-brand"
+      >
+        <ThemeSwatch theme={value} mode={mode} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-medium">{THEMES[value]}</span>
+          <span className="block truncate text-[0.62rem] text-muted">{THEME_NOTE[value]}</span>
+        </span>
+        <ChevronDown
+          size={14} aria-hidden="true"
+          className={`shrink-0 text-muted transition-transform duration-150 motion-reduce:transition-none ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          ref={list}
+          id={uid + '-list'}
+          role="listbox"
+          aria-label="Theme"
+          onKeyDown={onListKey}
+          className="pop-in mt-1 max-h-[14rem] overflow-y-auto overscroll-contain rounded-lg border border-border bg-surface p-1 shadow-lg"
+        >
+          {ids.map((id, i) => {
+            const on = id === value
+            return (
+              <div
+                key={id}
+                ref={(el) => { items.current[i] = el }}
+                role="option"
+                aria-selected={on}
+                tabIndex={0}
+                onClick={() => choose(i)}
+                onFocus={() => setActive(i)}
+                className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-1.5 text-left outline-none transition-colors
+                  ${on ? 'border-brand bg-brand/10' : 'border-transparent hover:bg-surface-2'}
+                  focus-visible:border-brand focus-visible:bg-surface-2`}
+              >
+                <ThemeSwatch theme={id} mode={mode} />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-medium">{THEMES[id]}</span>
+                  <span className="block truncate text-[0.62rem] text-muted">{THEME_NOTE[id]}</span>
+                </span>
+                {on && <Check size={14} className="shrink-0 text-brand" />}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AppearanceMenu({
   appearance, onAppearance,
 }: { appearance: Appearance; onAppearance: (a: Appearance) => void }) {
   const [open, setOpen] = useState(false)
-  const wrap = useRef<HTMLDivElement>(null)
-  const panel = useRef<HTMLDivElement>(null)
-
-  /* The panel hangs off the right edge of its trigger, which is fine until the
-     top bar wraps on a narrow screen and the trigger lands near the left — then
-     right-aligning puts the whole panel off the left of the window. Measure and
-     nudge it back in. A fixed-position fallback is not available here: the
-     header's backdrop-blur makes it the containing block for fixed children. */
-  useLayoutEffect(() => {
-    const el = panel.current
-    if (!open || !el) return
-    el.style.transform = ''
-    const r = el.getBoundingClientRect()
-    const pad = 8
-    let dx = 0
-    if (r.right > innerWidth - pad) dx = innerWidth - pad - r.right
-    if (r.left + dx < pad) dx = pad - r.left
-    el.style.transform = dx ? `translateX(${Math.round(dx)}px)` : ''
-  }, [open])
-
-  /* A popover that outlives a click elsewhere, or Escape, is a trap. */
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    addEventListener('pointerdown', onDown)
-    addEventListener('keydown', onKey)
-    return () => { removeEventListener('pointerdown', onDown); removeEventListener('keydown', onKey) }
-  }, [open])
+  const close = useRef(() => setOpen(false)).current
+  /* The same popover primitive the pickers use, portalled to <body>. That is
+     what finally makes `fixed` legal here: the header's backdrop-blur makes it
+     a containing block for fixed descendants, but a portalled panel is not a
+     descendant of it. `align: 'end'` keeps the panel hanging off the right of
+     its trigger the way it always has, and usePopover clamps it into the
+     viewport — vertically as well, which is the belt-and-braces half of the
+     height fix: whatever is added here later, the panel stays on screen and
+     grows a scrollbar instead. */
+  const { trigger, panel, style } = usePopover(open, close, { align: 'end' })
 
   const mode = resolveMode(appearance.mode)
 
   return (
-    <div className="relative" ref={wrap}>
+    <>
       <button
+        ref={trigger}
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
@@ -853,114 +1002,99 @@ function AppearanceMenu({
       </button>
 
       {open && (
-        <div
-          ref={panel}
-          role="dialog"
-          aria-label="Appearance"
-          className="absolute right-0 top-full z-50 mt-2 w-[19rem] max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-surface p-3 shadow-2xl"
-        >
-          <Group label="Mode">
-            <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Mode">
-              {(Object.keys(MODES) as ModeId[]).map((m) => {
-                const Icon = m === 'light' ? Sun : m === 'dark' ? Moon : Monitor
-                const on = appearance.mode === m
-                return (
-                  <button
-                    key={m} type="button" role="radio" aria-checked={on}
-                    onClick={() => onAppearance({ ...appearance, mode: m })}
-                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs transition-colors
-                      ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
-                  >
-                    <Icon size={13} />{MODES[m]}
-                  </button>
-                )
-              })}
-            </div>
-            {appearance.mode === 'system' && (
-              <p className="num mt-1 text-[0.62rem] text-muted">
-                Following this device — currently {mode}.
+        <PopoverPortal>
+          <div
+            ref={panel}
+            role="dialog"
+            aria-label="Appearance"
+            style={style}
+            className={`${POPOVER} w-[19rem] max-w-[calc(100vw-1rem)]`}
+          >
+            {/* POPOVER already carries p-1.5; this tops it up to the p-3 this
+                panel wants, rather than fighting it with a second padding
+                utility on the same element. */}
+            <div className="p-1.5">
+              <Group label="Mode">
+                <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Mode">
+                  {(Object.keys(MODES) as ModeId[]).map((m) => {
+                    const Icon = m === 'light' ? Sun : m === 'dark' ? Moon : Monitor
+                    const on = appearance.mode === m
+                    return (
+                      <button
+                        key={m} type="button" role="radio" aria-checked={on}
+                        onClick={() => onAppearance({ ...appearance, mode: m })}
+                        className={`flex flex-1 items-center justify-center gap-1.5 rounded-md py-1 text-xs transition-colors
+                          ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
+                      >
+                        <Icon size={13} />{MODES[m]}
+                      </button>
+                    )
+                  })}
+                </div>
+                {appearance.mode === 'system' && (
+                  <p className="num mt-1 text-[0.62rem] text-muted">
+                    Following this device — currently {mode}.
+                  </p>
+                )}
+              </Group>
+
+              <Group label="Theme">
+                {/* Every swatch previews itself in the mode you are actually
+                    in, so what you see on the card is what the page becomes. */}
+                <ThemeSelect
+                  value={appearance.theme}
+                  mode={mode}
+                  onChange={(theme) => onAppearance({ ...appearance, theme })}
+                />
+              </Group>
+
+              <Group label="Font">
+                <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="Font">
+                  {(Object.keys(FONTS) as FontId[]).map((f) => {
+                    const on = appearance.font === f
+                    return (
+                      <button
+                        key={f} type="button" role="radio" aria-checked={on}
+                        onClick={() => onAppearance({ ...appearance, font: f })}
+                        // Rendered in its own face: you pick by looking, not by
+                        // guessing what "Grotesk" is going to turn out to mean.
+                        style={{ fontFamily: FONT_STACK[f] }}
+                        className={`rounded-lg border px-2 py-1.5 text-xs transition-colors
+                          ${on ? 'border-brand bg-brand/10' : 'border-border hover:bg-surface-2'}`}
+                      >
+                        {FONTS[f]}
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <Group label="Density">
+                <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Density">
+                  {(Object.keys(DENSITIES) as DensityId[]).map((d) => {
+                    const on = appearance.density === d
+                    return (
+                      <button
+                        key={d} type="button" role="radio" aria-checked={on}
+                        onClick={() => onAppearance({ ...appearance, density: d })}
+                        className={`flex-1 rounded-md py-1 text-xs transition-colors
+                          ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
+                      >
+                        {DENSITIES[d]}
+                      </button>
+                    )
+                  })}
+                </div>
+              </Group>
+
+              <p className="num mt-2 border-t border-border-soft pt-2 text-[0.6rem] text-muted">
+                Stored on this device. Your tasks live in your account.
               </p>
-            )}
-          </Group>
-
-          <Group label="Theme">
-            <div className="grid gap-1" role="radiogroup" aria-label="Theme">
-              {(Object.keys(THEMES) as ThemeId[]).map((id) => {
-                const on = appearance.theme === id
-                // Every card previews itself in the mode you are actually in,
-                // so what you see on the card is what the page becomes.
-                const [bg, surface, brand] = THEME_SWATCH[id][mode]
-                return (
-                  <button
-                    key={id} type="button" role="radio" aria-checked={on}
-                    onClick={() => onAppearance({ ...appearance, theme: id })}
-                    className={`flex items-center gap-2.5 rounded-lg border p-1.5 text-left transition-colors
-                      ${on ? 'border-brand bg-brand/10' : 'border-border hover:bg-surface-2'}`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="flex h-8 w-11 shrink-0 flex-col justify-between overflow-hidden rounded-md p-1 ring-1 ring-black/20"
-                      style={{ background: bg }}
-                    >
-                      <span className="block h-1.5 w-full rounded-[2px]" style={{ background: surface }} />
-                      <span className="block h-1.5 w-2/3 rounded-[2px]" style={{ background: brand }} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-medium">{THEMES[id]}</span>
-                      <span className="block truncate text-[0.62rem] text-muted">{THEME_NOTE[id]}</span>
-                    </span>
-                    {on && <Check size={14} className="shrink-0 text-brand" />}
-                  </button>
-                )
-              })}
             </div>
-          </Group>
-
-          <Group label="Font">
-            <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="Font">
-              {(Object.keys(FONTS) as FontId[]).map((f) => {
-                const on = appearance.font === f
-                return (
-                  <button
-                    key={f} type="button" role="radio" aria-checked={on}
-                    onClick={() => onAppearance({ ...appearance, font: f })}
-                    // Rendered in its own face: you pick by looking, not by
-                    // guessing what "Grotesk" is going to turn out to mean.
-                    style={{ fontFamily: FONT_STACK[f] }}
-                    className={`rounded-lg border px-2 py-1.5 text-xs transition-colors
-                      ${on ? 'border-brand bg-brand/10' : 'border-border hover:bg-surface-2'}`}
-                  >
-                    {FONTS[f]}
-                  </button>
-                )
-              })}
-            </div>
-          </Group>
-
-          <Group label="Density">
-            <div className="flex rounded-lg border border-border p-0.5" role="radiogroup" aria-label="Density">
-              {(Object.keys(DENSITIES) as DensityId[]).map((d) => {
-                const on = appearance.density === d
-                return (
-                  <button
-                    key={d} type="button" role="radio" aria-checked={on}
-                    onClick={() => onAppearance({ ...appearance, density: d })}
-                    className={`flex-1 rounded-md py-1 text-xs transition-colors
-                      ${on ? 'bg-brand/20 text-foreground' : 'text-muted hover:text-foreground'}`}
-                  >
-                    {DENSITIES[d]}
-                  </button>
-                )
-              })}
-            </div>
-          </Group>
-
-          <p className="num mt-2 border-t border-border-soft pt-2 text-[0.6rem] text-muted">
-            Stored on this device. Your tasks live in your account.
-          </p>
-        </div>
+          </div>
+        </PopoverPortal>
       )}
-    </div>
+    </>
   )
 }
 
