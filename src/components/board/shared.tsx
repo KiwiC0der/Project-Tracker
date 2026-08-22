@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
-import { GripVertical, Pencil } from 'lucide-react'
+import { GripVertical, Pencil, Plus } from 'lucide-react'
 import * as I from '@/lib/insights'
 import * as O from '@/lib/order'
+import { LiquidMetalButton } from '@/components/ui/liquid-metal-button'
+import { CreateTaskDialog } from './CreateTaskDialog'
 import type { Project, Task, TaskStatus, User } from '@/lib/store'
 
 /** Everything a panel or view needs. Passed down rather than context-ed so a
@@ -255,27 +257,33 @@ const Insertion = () => (
 
 /* ---------------------------------------------------------------------- */
 
+/**
+ * QUICK ADD — the entry point to creating a task.
+ *
+ * Was a bare text input that created on Enter. It is now a button that opens
+ * CreateTaskDialog, which is the same natural-language field plus the Notes,
+ * Status and Project a task actually has, and a preview you can correct before
+ * anything is written. `!high @fri /project` still work; they just fill the
+ * dialog's controls instead of being invisible.
+ *
+ * The name and props are unchanged, because two scenes render this.
+ * `placeholder` now names the button — a panel that wants "Capture" instead of
+ * "New task" keeps working.
+ */
 export function QuickAdd({ ctx, placeholder }: { ctx: Ctx; placeholder?: string }) {
-  const [v, setV] = useState('')
-  const preview = v.trim() ? I.parse(v, ctx.projects) : null
+  const [open, setOpen] = useState(false)
   return (
     <div>
-      <input
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onKeyDown={async (e) => {
-          if (e.key !== 'Enter') return
-          e.preventDefault()
-          if (await ctx.add(v)) setV('')
-        }}
-        placeholder={placeholder ?? 'ship the hero !high @fri'}
-        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+      <LiquidMetalButton
+        label={placeholder ?? 'New task'}
+        icon={<Plus size={14} />}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
       />
-      <p className="num mt-1 text-[0.65rem] text-muted">
-        {preview
-          ? <>Creates <b className="text-foreground">{preview.title || '(no title)'}</b> · {preview.priority} · {preview.due ? I.relDay(preview.due) : 'no date'}</>
-          : <>!high · @fri · /project — Enter to add</>}
-      </p>
+      <p className="num mt-1.5 text-[0.65rem] text-muted">!high · @fri · /project still work</p>
+      {/* Portals itself to <body>: this panel is overflow-hidden. */}
+      <CreateTaskDialog ctx={ctx} open={open} onClose={() => setOpen(false)} />
     </div>
   )
 }

@@ -133,6 +133,94 @@ export const SidebarGroupLabel = ({ children }: { children: ReactNode }) => (
   </p>
 )
 
+/**
+ * Shared look for the small square controls that sit on a group header row —
+ * the "+" that edits what a group contains. Exported as a class rather than a
+ * component because every caller needs its own ref on the button (each one is
+ * a popover trigger) and wrapping that would only add a forwardRef.
+ */
+export const sidebarIconButton =
+  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-1 focus-visible:ring-brand'
+
+/**
+ * A group whose header collapses it.
+ *
+ * The header is a real <button> carrying aria-expanded and aria-controls; the
+ * chevron is aria-hidden because it says nothing the button does not already
+ * announce. `action` sits BESIDE that button, never inside it — a button
+ * nested in a button is invalid HTML and screen readers flatten the pair into
+ * one confusing control.
+ *
+ * Collapsing animates `grid-template-rows` from 1fr to 0fr, which is the only
+ * way to transition to a content height nobody measured. index.css already
+ * neutralises transition-duration under prefers-reduced-motion globally; the
+ * `motion-reduce:` variants here say so locally too, so the intent survives
+ * anyone editing that block.
+ *
+ * The collapsed body stays in the DOM (it is mid-transition, and its id is the
+ * aria-controls target) so it is made `inert` instead — the same IDL-property
+ * assignment <Sidebar> uses, because React 18 silently drops `inert` as a JSX
+ * prop. Without it a collapsed group would still hand out tab stops.
+ */
+export function SidebarCollapsibleGroup({
+  label, contentId, open, onToggle, action, className, children,
+}: {
+  label: string
+  contentId: string
+  open: boolean
+  onToggle: () => void
+  action?: ReactNode
+  className?: string
+  children: ReactNode
+}) {
+  const body = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (body.current) body.current.inert = !open }, [open])
+
+  return (
+    <div className={cn('mb-4', className)}>
+      <div className="flex items-center gap-0.5 pb-1.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={contentId}
+          // Visible text is the group name; the accessible name adds the verb.
+          // "Collapse Workspace" still contains "Workspace", so the visible
+          // label remains a valid speech target.
+          aria-label={`${open ? 'Collapse' : 'Expand'} ${label}`}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.7rem] font-semibold uppercase tracking-wider text-muted outline-none transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:ring-1 focus-visible:ring-brand"
+        >
+          <svg
+            width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+            className={cn(
+              'shrink-0 transition-transform duration-200 ease-out motion-reduce:transition-none',
+              open ? 'rotate-0' : '-rotate-90',
+            )}
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+          <span className="truncate">{label}</span>
+        </button>
+        {action}
+      </div>
+
+      <div
+        className={cn(
+          'grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none',
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        )}
+      >
+        {/* min-h-0 lets the 0fr row actually reach zero — a grid item's
+            automatic minimum size would otherwise floor it at min-content. */}
+        <div ref={body} id={contentId} className="min-h-0 overflow-hidden">
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export const SidebarMenu = ({ children }: { children: ReactNode }) => (
   <ul className="flex flex-col gap-1">{children}</ul>
 )

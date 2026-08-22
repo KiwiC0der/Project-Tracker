@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   LayoutDashboard, ListTodo, Plus, LogOut, Trash2, Loader2,
   FolderKanban, Calendar as CalIcon, BarChart3, Settings as GearIcon,
   Sun, Moon, Monitor, Palette, History, ExternalLink, Check,
+  Pencil, Gauge, Flag, Hourglass, StickyNote,
 } from 'lucide-react'
 import {
   SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter,
-  SidebarGroup, SidebarGroupLabel, SidebarMenu, SidebarMenuItem,
-  SidebarMenuButton, SidebarTrigger,
+  SidebarCollapsibleGroup, SidebarMenu, SidebarMenuItem,
+  SidebarMenuButton, SidebarTrigger, sidebarIconButton, useSidebar,
 } from '@/components/ui/sidebar'
+import { usePopover, PANEL as POPOVER } from '@/components/ui/pickers'
 import {
   listProjects, listTasks, createProject, createTask, updateTask, deleteTask,
-  deleteProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
+  deleteProject, updateProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
   type Project, type Task, type TaskStatus, type User,
 } from '@/lib/store'
 import * as I from '@/lib/insights'
@@ -19,12 +21,16 @@ import * as O from '@/lib/order'
 import {
   THEMES, THEME_NOTE, MODES, FONTS, FONT_STACK, DENSITIES, THEME_SWATCH,
   loadAppearance, applyAppearance, resolveMode, watchSystemMode,
+  loadSidebar, saveSidebar,
   type Appearance, type ThemeId, type ModeId, type FontId, type DensityId,
-  type ResolvedMode,
+  type ResolvedMode, type SidebarPrefs, type SidebarGroupId,
 } from '@/lib/prefs'
 import { RELEASES, REPO } from '@/lib/releases'
-import { Workboard, PANELS, type PanelId } from '@/components/board/Workboard'
+import { Workboard, PANELS, type PanelId, type PanelFocus } from '@/components/board/Workboard'
 import { TaskDialog } from '@/components/board/TaskDialog'
+import {
+  ProjectDialog, projectTone, PROJECT_STATUSES, type ProjectDraft,
+} from '@/components/board/ProjectDialog'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from '@/components/board/shared'
 
 type View = 'dashboard' | 'list' | 'calendar' | 'reports' | 'versions' | 'settings'
@@ -36,6 +42,200 @@ const VIEWS: Record<View, { title: string; icon: JSX.Element }> = {
   reports: { title: 'Reports', icon: <BarChart3 size={16} /> },
   versions: { title: 'Versions', icon: <History size={16} /> },
   settings: { title: 'Settings', icon: <GearIcon size={16} /> },
+}
+
+/* ============================================================================
+   SIDEBAR ENTRIES
+
+   What each editable group can contain. `WORKSPACE_ENTRIES` deliberately mixes
+   two kinds of destination — the two full views, and the dashboard's panels —
+   because from the reader's side they are the same thing: places to go. The
+   `kind` discriminates what clicking one actually does.
+
+   The panel titles come from Workboard's PANELS registry rather than being
+   retyped, so renaming a panel there renames it here too.
+   ========================================================================== */
+type Entry =
+  | { id: string; kind: 'view'; view: View; label: string; icon: JSX.Element }
+  | { id: string; kind: 'panel'; panel: PanelId; label: string; icon: JSX.Element }
+
+const PANEL_ICON: Record<PanelId, JSX.Element> = {
+  list: <ListTodo size={16} />,
+  progress: <Gauge size={16} />,
+  priorities: <Flag size={16} />,
+  stale: <Hourglass size={16} />,
+  notes: <StickyNote size={16} />,
+}
+
+/** `list` is omitted as a panel: the List VIEW is already in this group, and
+    two entries labelled "List" doing different things is a puzzle, not a
+    feature. */
+const WORKSPACE_ENTRIES: Entry[] = [
+  { id: 'dashboard', kind: 'view', view: 'dashboard', label: 'Dashboard', icon: VIEWS.dashboard.icon },
+  { id: 'list', kind: 'view', view: 'list', label: 'List', icon: VIEWS.list.icon },
+  ...(['progress', 'priorities', 'stale', 'notes'] as PanelId[]).map((p): Entry => ({
+    id: `panel:${p}`, kind: 'panel', panel: p, label: PANELS[p].title, icon: PANEL_ICON[p],
+  })),
+]
+
+const MORE_ENTRIES: Entry[] = (['calendar', 'reports', 'versions', 'settings'] as View[])
+  .map((v): Entry => ({ id: v, kind: 'view', view: v, label: VIEWS[v].title, icon: VIEWS[v].icon }))
+
+/** Which entries a group shows. `null` prefs mean "this build's default set",
+    so a later version adding an entry shows it to everyone who never opened
+    the picker — rather than it being invisible because an old list was frozen
+    into storage. Unknown saved ids are dropped on the way out. */
+function visibleEntries(all: Entry[], chosen: string[] | null, fallback: string[]): Entry[] {
+  const want = chosen ?? fallback
+  return want.map((id) => all.find((e) => e.id === id)).filter((e): e is Entry => Boolean(e))
+}
+
+const WORKSPACE_DEFAULT = ['dashboard', 'list']
+const MORE_DEFAULT = MORE_ENTRIES.map((e) => e.id)
+
+/* ============================================================================
+   GROUP EDITOR — the "+" on a group header
+
+   A checklist popover rather than a dialog: it is a small, reversible setting,
+   and the sidebar it edits should stay visible while you edit it.
+
+   It reuses `usePopover` from the pickers rather than growing a second
+   implementation. That hook is what stops Escape from closing the sidebar
+   drawer as well as the popover — it captures the key and stops it before the
+   drawer's own window listener sees it.
+   ========================================================================== */
+function EntryPicker({
+  label, all, chosen, fallback, onChange,
+}: {
+  label: string
+  all: Entry[]
+  chosen: string[] | null
+  fallback: string[]
+  onChange: (next: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const close = useRef(() => setOpen(false)).current
+  const { trigger, panel, style } = usePopover(open, close)
+  // A popover anchored inside the mobile drawer must not outlive it: the
+  // drawer slides off-screen and goes inert, and a fixed-position panel would
+  // otherwise stay put, pinned to a trigger nobody can see or reach.
+  const { open: drawerOpen } = useSidebar()
+  useEffect(() => { if (!drawerOpen) setOpen(false) }, [drawerOpen])
+  const shown = new Set((chosen ?? fallback).filter((id) => all.some((e) => e.id === id)))
+
+  const toggle = (id: string) => {
+    const next = shown.has(id)
+      ? all.filter((e) => e.id !== id && shown.has(e.id)).map((e) => e.id)
+      // Rebuilt from `all` so the group keeps its canonical order however the
+      // boxes were ticked — the list is a set, not a sequence the user authors.
+      : all.filter((e) => e.id === id || shown.has(e.id)).map((e) => e.id)
+    onChange(next)
+  }
+
+  return (
+    <>
+      <button
+        ref={trigger} type="button"
+        aria-haspopup="dialog" aria-expanded={open}
+        aria-label={`Edit ${label} items`}
+        title={`Edit ${label} items`}
+        onClick={() => setOpen((o) => !o)}
+        className={sidebarIconButton}
+      >
+        <Plus size={13} />
+      </button>
+
+      {open && (
+        <div ref={panel} role="dialog" aria-label={`${label} items`} style={style}
+          className={`${POPOVER} w-[13rem]`}>
+          <p className="ui-face px-2 pb-1 pt-0.5 text-[0.58rem] uppercase tracking-wider text-muted">
+            Show in {label}
+          </p>
+          {all.map((e) => {
+            const on = shown.has(e.id)
+            return (
+              <label key={e.id}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-surface-2">
+                <input
+                  type="checkbox" checked={on} onChange={() => toggle(e.id)}
+                  className="h-3.5 w-3.5 shrink-0 accent-[var(--color-brand)]"
+                />
+                <span aria-hidden="true" className="shrink-0 text-muted">{e.icon}</span>
+                <span className="truncate">{e.label}</span>
+              </label>
+            )
+          })}
+          <p className="num border-t border-border-soft px-2 pb-0.5 pt-1.5 text-[0.58rem] text-muted">
+            Hiding one only removes it here.
+          </p>
+        </div>
+      )}
+    </>
+  )
+}
+
+/* ============================================================================
+   PROJECT MANAGER — the "+" on the Projects group
+
+   Lists every project with an edit affordance, plus a "New project" row. Edit
+   opens the same ProjectDialog in edit mode, where deleting also lives, so
+   there is exactly one place a project's details are changed.
+   ========================================================================== */
+function ProjectPicker({
+  projects, onNew, onEdit,
+}: { projects: Project[]; onNew: () => void; onEdit: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const close = useRef(() => setOpen(false)).current
+  const { trigger, panel, style } = usePopover(open, close)
+  const { open: drawerOpen } = useSidebar()
+  useEffect(() => { if (!drawerOpen) setOpen(false) }, [drawerOpen])
+
+  return (
+    <>
+      <button
+        ref={trigger} type="button"
+        aria-haspopup="dialog" aria-expanded={open}
+        aria-label="Add or edit projects" title="Add or edit projects"
+        onClick={() => setOpen((o) => !o)}
+        className={sidebarIconButton}
+      >
+        <Plus size={13} />
+      </button>
+
+      {open && (
+        <div ref={panel} role="dialog" aria-label="Projects" style={style}
+          className={`${POPOVER} w-[15rem]`}>
+          <p className="ui-face px-2 pb-1 pt-0.5 text-[0.58rem] uppercase tracking-wider text-muted">
+            Projects
+          </p>
+          {projects.length === 0 && (
+            <p className="px-2 py-1.5 text-sm text-muted">None yet.</p>
+          )}
+          {projects.map((p) => (
+            <div key={p.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-surface-2">
+              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full"
+                style={{ background: projectTone(p.color) }} />
+              <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+              <button
+                type="button" aria-label={`Edit ${p.name}`}
+                onClick={() => { close(); onEdit(p.id) }}
+                className="shrink-0 rounded p-1 text-muted hover:bg-brand/20 hover:text-foreground"
+              >
+                <Pencil size={12} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => { close(); onNew() }}
+            className="mt-0.5 flex w-full items-center gap-2 border-t border-border-soft px-2 pb-0.5 pt-2 text-left text-sm hover:text-brand"
+          >
+            <Plus size={14} />New project
+          </button>
+        </div>
+      )}
+    </>
+  )
 }
 
 export function DashboardScene({ user, onSignOut }: { user: User; onSignOut: () => void }) {
@@ -53,6 +253,39 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
   const [activeProject, setActiveProject] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
+  /* Project creation is a dialog, not a `window.prompt`. Held at scene level
+     next to `editing` so the sidebar button can open it from anywhere. */
+  const [creatingProject, setCreatingProject] = useState(false)
+  /* Sidebar shape: which groups are collapsed, and which entries each shows.
+     Persisted per device like the appearance prefs — it describes this screen,
+     not this account's data. */
+  const [sidebar, setSidebar] = useState<SidebarPrefs>(() => loadSidebar())
+  const putSidebar = useCallback((next: SidebarPrefs) => {
+    setSidebar(next)
+    saveSidebar(next)
+  }, [])
+  const toggleGroup = useCallback((g: SidebarGroupId) => {
+    setSidebar((cur) => {
+      const next = { ...cur, collapsed: { ...cur.collapsed, [g]: !cur.collapsed[g] } }
+      saveSidebar(next)
+      return next
+    })
+  }, [])
+
+  /** A panel entry navigates to the dashboard AND asks the board to open that
+      panel. The nonce is what makes a repeat click work: without it the prop
+      would be unchanged and the effect would not re-run, so clicking "Notes"
+      twice would do nothing the second time. */
+  const [panelFocus, setPanelFocus] = useState<PanelFocus | null>(null)
+  const showPanel = useCallback((id: PanelId) => {
+    setView('dashboard')
+    setPanelFocus({ id, nonce: Date.now() })
+  }, [])
+
+  /** The project open in the edit dialog, or null. Separate from `creating` so
+      one dialog component can serve both without a mode flag at the call site. */
+  const [editingProject, setEditingProject] = useState<string | null>(null)
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [appearance, setAppearance] = useState<Appearance>(() => loadAppearance())
@@ -176,31 +409,86 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     }
   }, [projects, activeProject])
 
-  const addProject = useCallback(async () => {
-    const name = window.prompt('Project name')?.trim()
-    if (!name) return
+  /* Unlike the task mutations above this one is NOT optimistic, and for the
+     same reason `add` isn't: the row's id comes from the backend, so there is
+     nothing to render until the insert returns. The dialog holds the draft and
+     stays open on failure, which is the rollback — no half-created project is
+     ever put on screen. */
+  /** Save edits to an existing project. Optimistic like every other mutation
+      here, and rolled back on failure so the sidebar never shows a name the
+      backend rejected. */
+  const saveProject = useCallback(async (id: string, d: ProjectDraft) => {
+    const prev = projects
+    setProjects((cur) => cur.map((p) => (p.id === id ? { ...p, ...d } : p)))
     try {
-      const p = await createProject(name)
+      await updateProject(id, d)
+      setEditingProject(null)
+      return null
+    } catch (err) {
+      setProjects(prev)
+      const msg = err instanceof Error ? err.message : 'Could not save that project.'
+      setError(msg)
+      return msg
+    }
+  }, [projects])
+
+  /** Open the edit dialog already showing its delete confirmation. The button
+      that got here said "Delete project", so asking again from scratch would
+      be a second unrelated question rather than a confirmation. */
+  const [armDelete, setArmDelete] = useState(false)
+  const askDeleteProject = useCallback((id: string) => {
+    setArmDelete(true)
+    setEditingProject(id)
+  }, [])
+
+  const submitProject = useCallback(async (d: ProjectDraft) => {
+    try {
+      const p = await createProject(d.name, d.description, d.color, d.status)
       setProjects((cur) => [...cur, p])
       setActiveProject(p.id)
       setView('list')
+      setCreatingProject(false)
+      return null
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create that project.')
+      const msg = err instanceof Error ? err.message : 'Could not create that project.'
+      // Shown inline in the dialog, and left in the scene banner so it survives
+      // the user giving up and closing it.
+      setError(msg)
+      return msg
     }
   }, [])
 
+  /**
+   * Delete a project and its tasks.
+   *
+   * Confirmation is the CALLER's job now, not a `window.confirm` in here: both
+   * entry points (the List header button and the edit dialog) route through
+   * ProjectDialog, which asks in a themed, labelled step that can name the
+   * project — something the native dialog cannot do. Returning a message
+   * instead of throwing lets the dialog show the failure inline and stay open.
+   */
   const removeProject = useCallback(async (id: string) => {
-    if (!window.confirm('Delete this project and all of its tasks?')) return
     try {
       await deleteProject(id)
       const rest = projects.filter((p) => p.id !== id)
       setProjects(rest)
       setTasks((cur) => cur.filter((t) => t.project_id !== id))
       if (activeProject === id) setActiveProject(rest[0]?.id ?? null)
+      return null
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not delete that project.')
+      const msg = err instanceof Error ? err.message : 'Could not delete that project.'
+      setError(msg)
+      return msg
     }
   }, [projects, activeProject])
+
+  /** The row being edited, resolved from state so a rename or delete elsewhere
+      cannot leave the dialog rendering a project that no longer exists. */
+  const editProject = useMemo(
+    () => projects.find((p) => p.id === editingProject) ?? null,
+    [projects, editingProject],
+  )
+
 
   const ctx = {
     projects, tasks, projectTasks, activeProject, selected,
@@ -218,21 +506,48 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
         </SidebarHeader>
 
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+          <SidebarCollapsibleGroup
+            label="Workspace"
+            contentId="sb-workspace"
+            open={!sidebar.collapsed.workspace}
+            onToggle={() => toggleGroup('workspace')}
+            action={
+              <EntryPicker
+                label="Workspace"
+                all={WORKSPACE_ENTRIES}
+                chosen={sidebar.workspace}
+                fallback={WORKSPACE_DEFAULT}
+                onChange={(next) => putSidebar({ ...sidebar, workspace: next })}
+              />
+            }
+          >
             <SidebarMenu>
-              {(['dashboard', 'list'] as View[]).map((v) => (
-                <SidebarMenuItem key={v}>
-                  <SidebarMenuButton active={view === v} onClick={() => setView(v)}>
-                    {VIEWS[v].icon}{VIEWS[v].title}
+              {visibleEntries(WORKSPACE_ENTRIES, sidebar.workspace, WORKSPACE_DEFAULT).map((e) => (
+                <SidebarMenuItem key={e.id}>
+                  <SidebarMenuButton
+                    active={e.kind === 'view' ? view === e.view : false}
+                    onClick={() => (e.kind === 'view' ? setView(e.view) : showPanel(e.panel))}
+                  >
+                    {e.icon}{e.label}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
-          </SidebarGroup>
+          </SidebarCollapsibleGroup>
 
-          <SidebarGroup>
-            <SidebarGroupLabel>Projects</SidebarGroupLabel>
+          <SidebarCollapsibleGroup
+            label="Projects"
+            contentId="sb-projects"
+            open={!sidebar.collapsed.projects}
+            onToggle={() => toggleGroup('projects')}
+            action={
+              <ProjectPicker
+                projects={projects}
+                onNew={() => setCreatingProject(true)}
+                onEdit={setEditingProject}
+              />
+            }
+          >
             <SidebarMenu>
               {projects.map((p) => {
                 const s = I.stats(tasks.filter((t) => t.project_id === p.id))
@@ -242,7 +557,14 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
                       active={activeProject === p.id && view === 'list'}
                       onClick={() => { setActiveProject(p.id); setView('list') }}
                     >
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-brand" />
+                      {/* The dot is the only place a project's colour is
+                          visible, so it reads `p.color` rather than a fixed
+                          accent. 'violet' — every legacy row — resolves back to
+                          the theme brand, so nothing changes appearance. */}
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: projectTone(p.color) }}
+                      />
                       <span className="truncate">{p.name}</span>
                       <span className="num ml-auto text-[0.7rem] text-muted">
                         {s.total - s.done}
@@ -252,25 +574,41 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
                 )
               })}
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={addProject}>
+                <SidebarMenuButton onClick={() => setCreatingProject(true)}>
                   <Plus size={16} />New project
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
-          </SidebarGroup>
+          </SidebarCollapsibleGroup>
 
-          <SidebarGroup>
-            <SidebarGroupLabel>More</SidebarGroupLabel>
+          <SidebarCollapsibleGroup
+            label="More"
+            contentId="sb-more"
+            open={!sidebar.collapsed.more}
+            onToggle={() => toggleGroup('more')}
+            action={
+              <EntryPicker
+                label="More"
+                all={MORE_ENTRIES}
+                chosen={sidebar.more}
+                fallback={MORE_DEFAULT}
+                onChange={(next) => putSidebar({ ...sidebar, more: next })}
+              />
+            }
+          >
             <SidebarMenu>
-              {(['calendar', 'reports', 'versions', 'settings'] as View[]).map((v) => (
-                <SidebarMenuItem key={v}>
-                  <SidebarMenuButton active={view === v} onClick={() => setView(v)}>
-                    {VIEWS[v].icon}{VIEWS[v].title}
+              {visibleEntries(MORE_ENTRIES, sidebar.more, MORE_DEFAULT).map((e) => (
+                <SidebarMenuItem key={e.id}>
+                  <SidebarMenuButton
+                    active={e.kind === 'view' && view === e.view}
+                    onClick={() => e.kind === 'view' && setView(e.view)}
+                  >
+                    {e.icon}{e.label}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
-          </SidebarGroup>
+          </SidebarCollapsibleGroup>
         </SidebarContent>
 
         <SidebarFooter>
@@ -280,7 +618,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium">{user.displayName}</p>
-              <p className="num truncate text-[0.7rem] text-muted">{user.email}</p>
+              <p className="num truncate text-[0.7rem] text-muted">{user.username}</p>
             </div>
           </div>
           <SidebarMenuButton onClick={async () => { await signOut(); onSignOut() }}>
@@ -315,10 +653,10 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               <Loader2 className="animate-spin" />
             </div>
           ) : view === 'dashboard' ? (
-            <Workboard ctx={ctx} />
+            <Workboard ctx={ctx} focus={panelFocus} />
           ) : (
             <div className="scene-enter flex-1 overflow-auto p-4 sm:p-6">
-              {view === 'list' && <ListView ctx={ctx} onRemoveProject={removeProject} />}
+              {view === 'list' && <ListView ctx={ctx} onDeleteProject={askDeleteProject} />}
               {view === 'calendar' && <CalendarView ctx={ctx} />}
               {view === 'reports' && <ReportsView ctx={ctx} />}
               {view === 'versions' && <VersionsView />}
@@ -333,6 +671,36 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       {/* Scene level, not inside a panel: panels are overflow-hidden with their
           own stacking contexts and would clip it. */}
       <TaskDialog ctx={ctx} />
+      <ProjectDialog
+        open={creatingProject}
+        onSubmit={submitProject}
+        onClose={() => setCreatingProject(false)}
+      />
+
+      {/* Keyed on the project id so switching which one you are editing
+          remounts the dialog — otherwise its internal draft state would carry
+          the previous project's values into the next one. */}
+      {editProject && (
+        <ProjectDialog
+          key={editProject.id}
+          open
+          mode="edit"
+          initial={{
+            name: editProject.name,
+            description: editProject.description,
+            color: editProject.color,
+            status: editProject.status,
+          }}
+          armDelete={armDelete}
+          onSubmit={(d) => saveProject(editProject.id, d)}
+          onDelete={async () => {
+            const msg = await removeProject(editProject.id)
+            if (!msg) setEditingProject(null)
+            return msg
+          }}
+          onClose={() => { setEditingProject(null); setArmDelete(false) }}
+        />
+      )}
     </div>
   )
 }
@@ -609,7 +977,7 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 /* ==========================================================================
    LIST
    ========================================================================== */
-function ListView({ ctx, onRemoveProject }: { ctx: Ctx; onRemoveProject: (id: string) => void }) {
+function ListView({ ctx, onDeleteProject }: { ctx: Ctx; onDeleteProject: (id: string) => void }) {
   const p = ctx.projects.find((x) => x.id === ctx.activeProject)
   const s = I.stats(ctx.projectTasks)
   if (!p) {
@@ -618,18 +986,35 @@ function ListView({ ctx, onRemoveProject }: { ctx: Ctx; onRemoveProject: (id: st
   return (
     <div className="mx-auto w-full max-w-6xl">
       <div className="mb-4 flex flex-wrap items-baseline gap-3 border-b border-border pb-3">
-        <h2 className="text-2xl font-semibold tracking-tight">{p.name}</h2>
+        <h2 className="flex items-baseline gap-2 text-2xl font-semibold tracking-tight">
+          <span
+            aria-hidden="true"
+            className="h-2.5 w-2.5 shrink-0 self-center rounded-full"
+            style={{ background: projectTone(p.color) }}
+          />
+          {p.name}
+        </h2>
+        {/* Status is only worth collecting if it is visible somewhere. 'active'
+            is the overwhelming default, so only the exceptions get a pill. */}
+        {p.status !== 'active' && (
+          <span className="ui-face rounded-full border border-border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider text-muted">
+            {PROJECT_STATUSES.find((x) => x.id === p.status)?.label ?? p.status}
+          </span>
+        )}
         <p className="num text-xs text-muted">
           {s.done} of {s.total} done · {s.todo} to do · {s.doing} in progress
           {s.overdue > 0 && <> · <b className="text-brand">{s.overdue} overdue</b></>}
         </p>
         <button
           type="button"
-          onClick={() => onRemoveProject(p.id)}
+          onClick={() => onDeleteProject(p.id)}
           className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground"
         >
           <Trash2 size={13} />Delete project
         </button>
+        {/* Last child with `w-full`, so it takes a row of its own under the
+            title rather than pushing the delete button onto a third line. */}
+        {p.description && <p className="w-full text-sm text-muted">{p.description}</p>}
       </div>
       <QuickAdd ctx={ctx} />
       <BoardColumns ctx={ctx} />
@@ -974,7 +1359,7 @@ function SettingsView({
 
       <section className="mt-4 rounded-xl border border-border bg-surface p-4">
         <h3 className="ui-face mb-1 text-[0.65rem] font-semibold uppercase tracking-wider text-muted">Account</h3>
-        <Row label={ctx.user.displayName} hint={ctx.user.email}>
+        <Row label={ctx.user.displayName} hint={ctx.user.username}>
           <span className="num text-[0.65rem] text-muted">
             {usingRealBackend ? 'Supabase · row-level security' : 'Demo mode · this browser only'}
           </span>

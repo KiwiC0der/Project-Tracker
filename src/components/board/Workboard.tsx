@@ -225,7 +225,16 @@ function Split({ node, onCommit, a, b }: {
 
 /* ---------------------------------------------------------------------- */
 
-export function Workboard({ ctx }: { ctx: Ctx }) {
+/**
+ * A request from outside the board — the sidebar — to bring one panel up.
+ *
+ * The nonce is what makes "show me Notes" repeatable: asking for the panel you
+ * are already looking at is still an answerable request (raise it, focus it),
+ * and an id alone could not distinguish a second ask from a re-render.
+ */
+export interface PanelFocus { id: PanelId; nonce: number }
+
+export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null }) {
   const boardRef = useRef<HTMLDivElement>(null)
   const geoRef = useRef<Record<string, Geo>>({})
   const zRef = useRef(20)
@@ -236,6 +245,10 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
   /** The panel you are working in. Drives the heavier cast shadow, and in loose
       mode the stacking order — the selected window is the front window. */
   const [active, setActive] = useState<PanelId | null>(null)
+  /** Flipped once the restore pass below has run. An external focus request
+      that landed before it would read `open` as the hardcoded default, reopen
+      the default set and save that over the arrangement being restored. */
+  const [restored, setRestored] = useState(false)
   const [, force] = useState(0)
   const repaint = useCallback(() => force((n) => n + 1), [])
 
@@ -243,6 +256,7 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
 
   /* ---- persistence ---- */
   useEffect(() => {
+    setRestored(true)
     try {
       const raw = localStorage.getItem(LAYOUT_KEY)
       if (raw) {
@@ -398,6 +412,34 @@ export function Workboard({ ctx }: { ctx: Ctx }) {
     if (active === id) setActive(null)
     save({ open: next, tree: t })
   }
+
+  /* ---- external focus requests -------------------------------------------
+     The sidebar's Workspace entries navigate here. Nothing is faked: the
+     request goes through the same `openPanel` the dock button uses, so the
+     panel is really opened, really selected, and really written to
+     LAYOUT_KEY — reload and it is still there.
+
+     No dependency array on purpose (the ResizeObserver effect above does the
+     same): this must read the CURRENT `open`, and a nonce compared against a
+     ref is a tighter guard than any dep list would be. -------------------- */
+  const servedNonce = useRef(0)
+  useEffect(() => {
+    if (!restored || !focus || focus.nonce === servedNonce.current) return
+    servedNonce.current = focus.nonce
+    const { id } = focus
+    if (!open.includes(id)) openPanel(id)
+    setActive(id)
+    // The frame after: a panel that was just opened has no element yet.
+    // Focusing the head is enough to finish the job — it is the panel's own tab
+    // stop, so this lands a keyboard user exactly where tabbing to it would,
+    // and `onFocusCapture` on the frame runs selectPanel, which raises the
+    // panel in loose mode and persists the new stacking order.
+    requestAnimationFrame(() => {
+      boardRef.current
+        ?.querySelector<HTMLElement>(`[data-panel="${id}"] [data-head]`)
+        ?.focus()
+    })
+  })
 
   /* ---- selection --------------------------------------------------------
      Touching a panel anywhere selects it: the capture phase runs before the

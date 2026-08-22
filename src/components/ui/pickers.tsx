@@ -16,10 +16,18 @@ import type { Priority } from '@/lib/store'
    backdrop-filter, which makes it the containing block for fixed descendants.)
    ========================================================================== */
 
-const PANEL =
+export const PANEL =
   'fixed z-[60] rounded-xl border border-border bg-surface p-1.5 shadow-2xl'
 
-function usePopover(open: boolean, onClose: () => void) {
+/**
+ * Exported so the sidebar's group editors get the same popover behaviour these
+ * pickers have rather than a second, subtly different implementation:
+ * fixed placement that escapes an overflow-hidden ancestor, dismissal on
+ * outside pointerdown and on scroll, and — the part that matters most in the
+ * sidebar — Escape captured and stopped so it closes the popover WITHOUT also
+ * reaching the window-level listener that closes the whole drawer.
+ */
+export function usePopover(open: boolean, onClose: () => void) {
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
@@ -58,8 +66,15 @@ function usePopover(open: boolean, onClose: () => void) {
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       e.stopPropagation()          // do not also close a dialog behind this
+      const back = trigger.current
       onClose()
-      trigger.current?.focus()     // focus must come back out of the popover
+      // Refocus AFTER React has committed the unmount. Both a synchronous call
+      // and a microtask run BEFORE the commit, so focus lands on a node that is
+      // then removed and the browser falls back to <body> — dumping a keyboard
+      // user at the top of the document every time they dismiss a popover.
+      // A rAF is past the commit; the guard covers the trigger itself having
+      // unmounted in the meantime.
+      requestAnimationFrame(() => { if (back?.isConnected) back.focus() })
     }
     addEventListener('pointerdown', down)
     addEventListener('keydown', key, true)

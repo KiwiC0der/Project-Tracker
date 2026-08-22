@@ -1,15 +1,18 @@
 {
   "name": "project-tracker",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "archives": "node scripts/archive-all.mjs",
     "build": "npm run archives && tsc -b --noCheck && vite build",
+    "build:demo": "node scripts/build-demo.mjs",
+    "preview:demo": "npm run build:demo && vite preview --outDir dist-demo",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@paper-design/shaders": "^0.0.80",
     "@radix-ui/react-slot": "^1.1.2",
     "@supabase/supabase-js": "^2.48.1",
     "class-variance-authority": "^0.7.1",

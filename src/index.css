@@ -23,7 +23,7 @@
 }
 
 /* ============================================================================
-   THEMES — five families, each in light and dark
+   THEMES — eleven families, each in light and dark
    ----------------------------------------------------------------------------
    Tailwind v4 compiles `bg-surface` to `var(--color-surface)`, so overriding
    these custom properties at runtime re-themes every existing utility class
@@ -32,8 +32,8 @@
    Two independent axes on <html>: `data-theme` picks the family (its hues and
    its character) and `data-mode` picks light or dark. They are separate
    because "I want Blueprint, but light today" is a real request, and folding
-   mode into the family list would need ten entries in the picker instead of
-   five plus a switch.
+   mode into the family list would need twenty-two entries in the picker
+   instead of eleven plus a switch.
 
    `data-mode` is only ever written as `light` or `dark`; "system" is resolved
    in JS against `prefers-color-scheme`, so no palette needs an @media twin.
@@ -190,6 +190,198 @@
   --color-brand: #4ade80;
   --color-brand-soft: #86efac;
   --color-todo: #5c8b6e;
+  --color-doing: #fbbf24;
+  --color-done: #4ade80;
+  color-scheme: dark;
+}
+
+/* ---- EMBER — cold forge, hot metal ---- */
+:root[data-theme='ember'][data-mode='light'] {
+  --color-background: #faf6f1;
+  --color-surface: #fffdfa;
+  --color-surface-2: #f0e8de;
+  --color-border: #d0bda6;
+  --color-border-soft: #e6d9c9;
+  --color-foreground: #1a140e;
+  --color-muted: #6a5b4c;
+  --color-brand: #b8410a;
+  --color-brand-soft: #d4530f;
+  --color-todo: #6a5b4c;
+  --color-doing: #a06a12;
+  --color-done: #3f7d55;
+  color-scheme: light;
+}
+:root[data-theme='ember'][data-mode='dark'] {
+  --color-background: #12100e;
+  --color-surface: #1a1714;
+  --color-surface-2: #241f1a;
+  --color-border: #3d3229;
+  --color-border-soft: #2b241d;
+  --color-foreground: #f5ede4;
+  --color-muted: #a2937f;
+  --color-brand: #ff7a18;
+  --color-brand-soft: #ff9a4d;
+  --color-todo: #a2937f;
+  --color-doing: #e8b13c;
+  --color-done: #7fc98a;
+  color-scheme: dark;
+}
+
+/* ---- ORCHID — deep plum with an acid edge ---- */
+:root[data-theme='orchid'][data-mode='light'] {
+  --color-background: #f8f4f9;
+  --color-surface: #fffdff;
+  --color-surface-2: #efe6f2;
+  --color-border: #cbb5d2;
+  --color-border-soft: #e0d1e6;
+  --color-foreground: #1c101f;
+  --color-muted: #69566f;
+  --color-brand: #4f7a00;
+  --color-brand-soft: #639700;
+  --color-todo: #69566f;
+  --color-doing: #96660f;
+  --color-done: #2f7a4e;
+  color-scheme: light;
+}
+:root[data-theme='orchid'][data-mode='dark'] {
+  --color-background: #150e18;
+  --color-surface: #1e1423;
+  --color-surface-2: #291b2f;
+  --color-border: #45304d;
+  --color-border-soft: #33223a;
+  --color-foreground: #f2e9f5;
+  --color-muted: #a08bab;
+  --color-brand: #b8e62e;
+  --color-brand-soft: #cbf053;
+  --color-todo: #a08bab;
+  --color-doing: #e8b13c;
+  --color-done: #7ddba0;
+  color-scheme: dark;
+}
+
+/* ---- TIDE — petrol depth, coral surfacing ---- */
+:root[data-theme='tide'][data-mode='light'] {
+  --color-background: #eef5f4;
+  --color-surface: #f8fbfb;
+  --color-surface-2: #dfeceb;
+  --color-border: #a5c4c2;
+  --color-border-soft: #c6dcda;
+  --color-foreground: #06201f;
+  --color-muted: #496b6a;
+  --color-brand: #c2381f;
+  --color-brand-soft: #d64f34;
+  --color-todo: #496b6a;
+  --color-doing: #a06a12;
+  --color-done: #0f766e;
+  color-scheme: light;
+}
+:root[data-theme='tide'][data-mode='dark'] {
+  --color-background: #061414;
+  --color-surface: #0a1c1d;
+  --color-surface-2: #0f2729;
+  --color-border: #1d4245;
+  --color-border-soft: #163336;
+  --color-foreground: #dff2f1;
+  --color-muted: #7ba3a4;
+  --color-brand: #ff6b5a;
+  --color-brand-soft: #ff8b7d;
+  --color-todo: #7ba3a4;
+  --color-doing: #e8b13c;
+  --color-done: #5fd6b4;
+  color-scheme: dark;
+}
+
+/* ---- CLAY — unfired earth, matte and dusty ---- */
+:root[data-theme='clay'][data-mode='light'] {
+  --color-background: #f5f1ea;
+  --color-surface: #fdfbf6;
+  --color-surface-2: #eae3d7;
+  --color-border: #c8b9a4;
+  --color-border-soft: #dcd1bf;
+  --color-foreground: #1e1811;
+  --color-muted: #695e4e;
+  --color-brand: #9c4420;
+  --color-brand-soft: #b55731;
+  --color-todo: #695e4e;
+  --color-doing: #96660f;
+  --color-done: #4d7c3f;
+  color-scheme: light;
+}
+:root[data-theme='clay'][data-mode='dark'] {
+  --color-background: #16120f;
+  --color-surface: #1f1a16;
+  --color-surface-2: #2a231d;
+  --color-border: #453a2f;
+  --color-border-soft: #322a23;
+  --color-foreground: #f0e8de;
+  --color-muted: #9d8e7d;
+  --color-brand: #d4785a;
+  --color-brand-soft: #e59b7e;
+  --color-todo: #9d8e7d;
+  --color-doing: #d9a441;
+  --color-done: #8fae7d;
+  color-scheme: dark;
+}
+
+/* ---- VAPOR — slate at night, magenta and cyan signal ---- */
+:root[data-theme='vapor'][data-mode='light'] {
+  --color-background: #f2f4fa;
+  --color-surface: #fdfdff;
+  --color-surface-2: #e6eaf5;
+  --color-border: #b4bed6;
+  --color-border-soft: #d0d8ea;
+  --color-foreground: #0e1220;
+  --color-muted: #55617f;
+  --color-brand: #b8008a;
+  --color-brand-soft: #d2129c;
+  --color-todo: #55617f;
+  --color-doing: #96660f;
+  --color-done: #0d7d76;
+  color-scheme: light;
+}
+:root[data-theme='vapor'][data-mode='dark'] {
+  --color-background: #0b0e17;
+  --color-surface: #121724;
+  --color-surface-2: #1a2133;
+  --color-border: #2e3852;
+  --color-border-soft: #222a3e;
+  --color-foreground: #e6ecf7;
+  --color-muted: #8b9ab5;
+  --color-brand: #ff2fb3;
+  --color-brand-soft: #ff6cc8;
+  --color-todo: #8b9ab5;
+  --color-doing: #ffc94d;
+  --color-done: #2ee6d6;
+  color-scheme: dark;
+}
+
+/* ---- BONE — no greys to hide behind, hard rules and one red ---- */
+:root[data-theme='bone'][data-mode='light'] {
+  --color-background: #fffffd;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f1ee;
+  --color-border: #141414;
+  --color-border-soft: #d5d5d0;
+  --color-foreground: #000000;
+  --color-muted: #494944;
+  --color-brand: #d81e00;
+  --color-brand-soft: #f03a1c;
+  --color-todo: #494944;
+  --color-doing: #8a6100;
+  --color-done: #186a3b;
+  color-scheme: light;
+}
+:root[data-theme='bone'][data-mode='dark'] {
+  --color-background: #0a0a0a;
+  --color-surface: #101010;
+  --color-surface-2: #1a1a1a;
+  --color-border: #ededea;
+  --color-border-soft: #2c2c2c;
+  --color-foreground: #fafafa;
+  --color-muted: #a6a6a1;
+  --color-brand: #ff3b1f;
+  --color-brand-soft: #ff6a52;
+  --color-todo: #a6a6a1;
   --color-doing: #fbbf24;
   --color-done: #4ade80;
   color-scheme: dark;

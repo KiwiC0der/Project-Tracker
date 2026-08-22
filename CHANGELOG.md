@@ -9,6 +9,68 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.5.0] — 2026-08-22
+
+### Added
+
+- **Six new themes** — Ember, Orchid, Tide, Clay, Vapor, Bone — promoted from
+  the variants lab. Eleven families in light and dark, 22 palettes. Every value
+  was copied verbatim from the prototype and re-verified: 132/132 tokens match,
+  and all 11 × 2 × 9 foreground/background pairs clear WCAG AA.
+- **Liquid Metal Button** (`src/components/ui/liquid-metal-button.tsx`), a
+  21st.dev shader component, replacing the quick-add text box. Pressing it opens
+  a **Create Task dialog** modelled on the edit dialog.
+- **Username sign-in.** Sign up and sign in with a username; the email field is
+  gone.
+- **Create/Edit Project dialog** — name, description, colour, status.
+- **Collapsible sidebar groups**, each with a `+` that edits its contents.
+  Workspace can list the dashboard's panels (Progress, Priorities, Stale,
+  Notes); clicking one navigates to the dashboard and opens that panel.
+
+### Changed
+
+- **No native browser dialogs remain.** `window.prompt('Project name')` and the
+  `window.confirm` behind project deletion are both gone. Deletion now confirms
+  inside the dialog, where it can name the project — something `confirm` cannot.
+- `createProject` takes a status; `updateProject` is wired to the edit dialog.
+
+### Fixed — found while integrating the component
+
+- **A WebGL context leak in the 21st.dev original.** Its cleanup calls
+  `shaderMount.destroy()`; the real method is `dispose()` (verified at
+  `shader-mount.js:386`), so every unmount leaked a GL context.
+- **Its label failed contrast**: `#666666` on a `#202020→#000000` slab measured
+  **2.84:1**. Now driven by tokens, sampled across the full gradient in all 22
+  palettes: **12.75:1 worst case**.
+- **It ignored `prefers-reduced-motion`** and hardcoded a black slab that looked
+  broken on light themes. Both fixed; the shader is not mounted at all when
+  reduced motion is set.
+- **Escape dropped focus to `<body>`** when dismissing a picker popover.
+  `onClose()` unmounts the panel before the synchronous `.focus()` lands, and a
+  microtask is still too early — it has to be deferred past React's commit.
+- **A sidebar popover outlived the mobile drawer**, staying pinned to a trigger
+  that had slid off-screen and gone `inert`.
+- **A username with a trailing newline passed validation.** JS `$` matches
+  before a final newline; `validateUsername` trims first so it was unreachable,
+  but a future caller that forgot to trim could have put a control character in
+  an email localpart.
+
+### Notes
+
+Supabase Auth has no username identity type — only email and phone. Usernames
+are therefore mapped to `<name>@users.noreply.pt.anteneh.tech`, a domain with no
+MX record. Uniqueness is real (Postgres' unique constraint on `auth.users.email`
+enforces it), but **there is no deliverable address on file, so password reset is
+impossible** until the planned recovery-email feature ships. The sign-up form
+says so.
+
+`npm run build:demo` is new: it builds with the Supabase vars cleared **and
+verifies the bundle contains no project ref and no JWT before handing it over**.
+`dist/` is built from the real `.env`, and previewing it drives the live backend
+— which happened once during this work and created a real account.
+
+---
+
 ## [2.4.0] — 2026-08-18
 
 ### Removed
@@ -246,6 +308,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.5.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.2.0

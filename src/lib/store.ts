@@ -9,16 +9,100 @@ export type Priority = 'low' | 'medium' | 'high'
 
 export interface User {
   id: string
+  /** As the user typed it at sign-up — original casing preserved. Display this. */
+  username: string
+  /**
+   * A REAL, deliverable address the user gave us. Empty until the planned
+   * recovery-email feature lands, because username sign-up never asks for one.
+   * The synthesized `@AUTH_EMAIL_DOMAIN` handle is deliberately NOT stored here:
+   * it is an internal Supabase identity string, not mail the user can receive.
+   */
   email: string
   displayName: string
 }
+
+// ============================================================================
+// Username identity — the mapping onto Supabase Auth
+// ----------------------------------------------------------------------------
+// Supabase Auth has exactly two identity types: email and phone. There is no
+// username type. So "sign in with a username" has to be a mapping we own:
+// every username is deterministically turned into an address at a domain that
+// has no MX record and can never receive mail, mirroring GitHub's
+// `users.noreply.github.com` convention.
+//
+//   ada  ->  ada@users.noreply.pt.anteneh.tech
+//
+// A future reader must not mistake this for something the user typed. It is
+// never shown in the UI (see User.email above and DashboardScene's footer).
+//
+// WHAT THIS BUYS US: uniqueness is enforced for real — by Postgres' unique
+// constraint on auth.users.email — so two people cannot claim one username.
+//
+// WHAT IT DOES NOT BUY US: there is no address on file, so PASSWORD RESET IS
+// IMPOSSIBLE. A forgotten password means a lost account until the recovery
+// email feature ships. The sign-up form says so; do not remove that note
+// before the feature exists.
+// ============================================================================
+export const AUTH_EMAIL_DOMAIN = 'users.noreply.pt.anteneh.tech'
+
+/** The one rule, stated once, shown verbatim to the user on failure. */
+export const USERNAME_RULE =
+  'Usernames are 3–30 characters, letters, digits, underscores or hyphens, and must start with a letter or digit.'
+
+// Anchored so it also guarantees a valid email localpart: no dots, no spaces,
+// no leading punctuation, nothing that would need quoting.
+//
+// The trailing lookahead is not decoration: in JS, `$` also matches BEFORE a
+// final newline, so the pattern without it accepts a username with a trailing
+// newline. validateUsername trims first, so that is unreachable today — but a
+// future caller that forgets to trim must not be able to smuggle a control
+// character into an email localpart.
+const USERNAME_RE = /^[a-z0-9][a-z0-9_-]{2,29}$(?![\r\n])/i
+
+/** Lowercased identity key. The mapping is case-insensitive; display is not. */
+export function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase()
+}
+
+/** @returns an error string naming the rule, or null when the username is fine. */
+export function validateUsername(username: string): string | null {
+  const raw = username.trim()
+  if (!raw) return 'Username is required.'
+  if (!USERNAME_RE.test(raw)) return USERNAME_RULE
+  return null
+}
+
+/** The single place a username becomes a Supabase identity. */
+export function usernameToAuthEmail(username: string): string {
+  return `${normalizeUsername(username)}@${AUTH_EMAIL_DOMAIN}`
+}
+
+/**
+ * Supabase phrases its auth errors in terms of the email it thinks it has.
+ * Someone who typed a username must never be told about an address they never
+ * saw, so translate before the message reaches the screen.
+ */
+function friendlyAuthError(message: string): string {
+  const m = message.toLowerCase()
+  if (m.includes('invalid login credentials')) return 'Incorrect username or password.'
+  if (m.includes('already registered') || m.includes('already been registered')) {
+    return 'That username is already taken.'
+  }
+  return message
+    .replace(new RegExp(`\\S*@${AUTH_EMAIL_DOMAIN}`, 'gi'), 'that username')
+    .replace(/email address/gi, 'username')
+    .replace(/email/gi, 'username')
+}
+
+/** Mirrors the `projects.status` CHECK constraint in supabase/schema.sql. */
+export type ProjectStatus = 'active' | 'paused' | 'done' | 'archived'
 
 export interface Project {
   id: string
   name: string
   description: string
   color: string
-  status: 'active' | 'paused' | 'done' | 'archived'
+  status: ProjectStatus
   position: number
   created_at: string
 }
@@ -53,21 +137,64 @@ export interface AuthResult {
 // ============================================================================
 const DEMO_KEY = 'project-tracker-demo'
 
+interface DemoUser {
+  id: string
+  /** Original casing. The record is KEYED by the lowercased form. */
+  username: string
+  password: string
+  displayName: string
+}
+
 interface DemoDb {
-  users: Record<string, { id: string; email: string; password: string; displayName: string }>
+  users: Record<string, DemoUser>
   session: string | null
   projects: Project[]
   tasks: Task[]
 }
 
+const emptyDemo = (): DemoDb => ({ users: {}, session: null, projects: [], tasks: [] })
+
+/**
+ * Blobs written before usernames existed were keyed by email and have no
+ * `username` field. Rather than trusting whatever shape is in storage, coerce
+ * it: a stale or hand-edited blob must degrade to "no session", never throw on
+ * first paint.
+ */
+function sanitizeDemo(raw: unknown): DemoDb {
+  if (!raw || typeof raw !== 'object') return emptyDemo()
+  const src = raw as Partial<DemoDb>
+  const db = emptyDemo()
+
+  if (src.users && typeof src.users === 'object' && !Array.isArray(src.users)) {
+    for (const [key, rec] of Object.entries(src.users as Record<string, unknown>)) {
+      const u = rec as Partial<DemoUser> | null
+      // Legacy email-keyed rows have no username and cannot be resolved; they
+      // are dropped from the working copy so nothing downstream reads undefined.
+      if (!u || typeof u.id !== 'string' || typeof u.username !== 'string') continue
+      db.users[key] = {
+        id: u.id,
+        username: u.username,
+        password: typeof u.password === 'string' ? u.password : '',
+        displayName: typeof u.displayName === 'string' ? u.displayName : u.username,
+      }
+    }
+  }
+
+  db.session =
+    typeof src.session === 'string' && src.session in db.users ? src.session : null
+  db.projects = Array.isArray(src.projects) ? (src.projects as Project[]) : []
+  db.tasks = Array.isArray(src.tasks) ? (src.tasks as Task[]) : []
+  return db
+}
+
 function loadDemo(): DemoDb {
   try {
     const raw = localStorage.getItem(DEMO_KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) return sanitizeDemo(JSON.parse(raw))
   } catch {
     /* corrupt or unavailable storage — fall through to a fresh db */
   }
-  return { users: {}, session: null, projects: [], tasks: [] }
+  return emptyDemo()
 }
 
 function saveDemo(db: DemoDb) {
@@ -121,17 +248,24 @@ export const usingRealBackend = isSupabaseConfigured
 
 // ---------- auth ----------
 export async function signUp(
-  email: string,
+  username: string,
   password: string,
   displayName: string,
 ): Promise<AuthResult> {
+  const invalid = validateUsername(username)
+  if (invalid) return { user: null, error: invalid }
+
+  const typed = username.trim()
+  const key = normalizeUsername(typed)
+
   if (supabase) {
     const { data, error } = await supabase.auth.signUp({
-      email,
+      // Synthesized — see AUTH_EMAIL_DOMAIN. The user never typed this.
+      email: usernameToAuthEmail(typed),
       password,
-      options: { data: { display_name: displayName } },
+      options: { data: { display_name: displayName, username: typed } },
     })
-    if (error) return { user: null, error: error.message }
+    if (error) return { user: null, error: friendlyAuthError(error.message) }
     if (!data.session) {
       return { user: null, error: null, needsConfirmation: true }
     }
@@ -139,33 +273,43 @@ export async function signUp(
   }
 
   const db = loadDemo()
-  const key = email.toLowerCase()
-  if (db.users[key]) return { user: null, error: 'An account with that email already exists.' }
+  if (db.users[key]) return { user: null, error: 'That username is already taken.' }
   const id = uid()
-  db.users[key] = { id, email, password, displayName }
+  db.users[key] = { id, username: typed, password, displayName }
   db.session = key
   const seed = starterContent()
   db.projects.push(seed.project)
   db.tasks.push(...seed.tasks)
   saveDemo(db)
-  return { user: { id, email, displayName }, error: null }
+  return { user: { id, username: typed, email: '', displayName }, error: null }
 }
 
-export async function signIn(email: string, password: string): Promise<AuthResult> {
+export async function signIn(username: string, password: string): Promise<AuthResult> {
+  const invalid = validateUsername(username)
+  if (invalid) return { user: null, error: invalid }
+
+  const key = normalizeUsername(username)
+
   if (supabase) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) return { user: null, error: error.message }
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: usernameToAuthEmail(key),
+      password,
+    })
+    if (error) return { user: null, error: friendlyAuthError(error.message) }
     return { user: toUser(data.user), error: null }
   }
 
   const db = loadDemo()
-  const rec = db.users[email.toLowerCase()]
+  const rec = db.users[key]
   if (!rec || rec.password !== password) {
-    return { user: null, error: 'Incorrect email or password.' }
+    return { user: null, error: 'Incorrect username or password.' }
   }
-  db.session = email.toLowerCase()
+  db.session = key
   saveDemo(db)
-  return { user: { id: rec.id, email: rec.email, displayName: rec.displayName }, error: null }
+  return {
+    user: { id: rec.id, username: rec.username, email: '', displayName: rec.displayName },
+    error: null,
+  }
 }
 
 export async function signOut(): Promise<void> {
@@ -186,15 +330,29 @@ export async function getCurrentUser(): Promise<User | null> {
   const db = loadDemo()
   if (!db.session) return null
   const rec = db.users[db.session]
-  return rec ? { id: rec.id, email: rec.email, displayName: rec.displayName } : null
+  // sanitizeDemo already dropped unresolvable rows; this is the last guard so a
+  // stale blob shows the login screen instead of throwing.
+  if (!rec) return null
+  return { id: rec.id, username: rec.username, email: '', displayName: rec.displayName }
 }
 
 function toUser(u: any): User {
+  const authEmail = typeof u?.email === 'string' ? u.email : ''
+  const localpart = authEmail.includes('@') ? authEmail.slice(0, authEmail.lastIndexOf('@')) : ''
+  // True for every username account. Only a real address — which today can only
+  // come from a legacy email-era account — survives into User.email.
+  const synthesized = authEmail.toLowerCase().endsWith(`@${AUTH_EMAIL_DOMAIN}`)
+
+  const username =
+    (typeof u?.user_metadata?.username === 'string' && u.user_metadata.username.trim()) ||
+    localpart ||
+    'there'
+
   return {
     id: u.id,
-    email: u.email ?? '',
-    displayName:
-      u.user_metadata?.display_name || (u.email ? String(u.email).split('@')[0] : 'there'),
+    username,
+    email: synthesized ? '' : authEmail,
+    displayName: u?.user_metadata?.display_name || username,
   }
 }
 
@@ -211,14 +369,19 @@ export async function listProjects(): Promise<Project[]> {
   return loadDemo().projects.slice().sort((a, b) => a.position - b.position)
 }
 
-export async function createProject(name: string, description = '', color = 'violet') {
+export async function createProject(
+  name: string,
+  description = '',
+  color = 'violet',
+  status: ProjectStatus = 'active',
+) {
   if (supabase) {
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) throw new Error('Not signed in.')
     const existing = await listProjects()
     const { data, error } = await supabase
       .from('projects')
-      .insert({ name, description, color, owner_id: auth.user.id, position: existing.length })
+      .insert({ name, description, color, status, owner_id: auth.user.id, position: existing.length })
       .select()
       .single()
     if (error) throw new Error(error.message)
@@ -231,7 +394,7 @@ export async function createProject(name: string, description = '', color = 'vio
     name,
     description,
     color,
-    status: 'active',
+    status,
     position: db.projects.length,
     created_at: new Date().toISOString(),
   }

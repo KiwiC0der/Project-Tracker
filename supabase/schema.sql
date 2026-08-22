@@ -17,6 +17,17 @@ create table if not exists public.profiles (
   created_at   timestamptz not null default now()
 );
 
+-- Accounts are created with a USERNAME, not an email. Supabase Auth has no
+-- username identity type, so the app synthesizes a non-deliverable address
+-- (`<username>@users.noreply.pt.anteneh.tech`) purely to satisfy auth.users,
+-- and stores the username as it was typed in raw_user_meta_data.
+--
+-- `profiles.email` therefore holds that synthesized handle for username-era
+-- accounts — it is NOT mail anyone can receive, and the app never shows it.
+-- `profiles.username` is the human-facing identity; read that instead.
+-- (Added after the initial release, hence a separate idempotent ALTER.)
+alter table public.profiles add column if not exists username text;
+
 -- Create the profile row automatically whenever someone signs up, so the app
 -- never has to handle a "logged in but no profile" state.
 create or replace function public.handle_new_user()
@@ -25,12 +36,20 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  uname text := nullif(trim(new.raw_user_meta_data->>'username'), '');
 begin
-  insert into public.profiles (id, email, display_name)
+  -- Pre-username accounts have no metadata: fall back to the email localpart.
+  if uname is null then
+    uname := nullif(split_part(coalesce(new.email, ''), '@', 1), '');
+  end if;
+
+  insert into public.profiles (id, email, username, display_name)
   values (
     new.id,
     new.email,
-    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1))
+    uname,
+    coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'), ''), uname)
   )
   on conflict (id) do nothing;
   return new;

@@ -31,11 +31,31 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.5.0',
+    date: '2026-08-22',
+    title: 'Six palettes, a shader button, usernames, and a sidebar that folds',
+    current: true,
+    archived: false,
+    summary:
+      'The six palettes from the variants lab became real themes, task and project ' +
+      'creation moved into dialogs, sign-in takes a username, and the sidebar groups ' +
+      'collapse and can be edited.',
+    changes: [
+      'Six new themes — Ember, Orchid, Tide, Clay, Vapor, Bone — for 11 families in light and dark',
+      'A Liquid Metal shader button replaces the quick-add text box; it opens a Create Task dialog',
+      'Sign up and sign in with a username instead of an email address',
+      'A real Create Project dialog: name, description, colour, status — no more window.prompt',
+      'Sidebar groups collapse, and a + on each edits what it contains',
+      'Workspace can list the dashboard panels; clicking one opens it on the board',
+      'Projects are edited and deleted from a dialog that names what it is deleting',
+      'No native browser dialogs left anywhere in the app',
+    ],
+  },
+  {
     version: '2.4.0',
     date: '2026-08-18',
     title: 'Lighter shadows, one fewer panel',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'The Editor panel retired now that every task has an edit dialog, and the ' +
       'cast shadow pulled back to weight rather than outline.',

@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { DotMatrixShader } from '@/components/ui/dot-matrix-shader'
-import { signIn, signUp, usingRealBackend, type User } from '@/lib/store'
-import { Loader2, Mail, Lock, UserRound, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { signIn, signUp, usingRealBackend, validateUsername, type User } from '@/lib/store'
+import { Loader2, AtSign, Lock, UserRound, AlertCircle, CheckCircle2 } from 'lucide-react'
 
-/** Scene 3 — login / signup. */
+/** Scene 3 — login / signup. Identity is a username; see store.ts AUTH_EMAIL_DOMAIN. */
 export function AuthScene({ onAuthed }: { onAuthed: (user: User) => void }) {
   const [isLogin, setIsLogin] = useState(true)
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -18,8 +18,15 @@ export function AuthScene({ onAuthed }: { onAuthed: (user: User) => void }) {
     setError(null)
     setNotice(null)
 
-    if (!email.trim() || !password) {
-      setError('Email and password are required.')
+    const name = username.trim()
+    // One rule, defined in store.ts, enforced identically on both forms.
+    const badUsername = validateUsername(name)
+    if (badUsername) {
+      setError(badUsername)
+      return
+    }
+    if (!password) {
+      setError('Password is required.')
       return
     }
     if (password.length < 6) {
@@ -30,13 +37,13 @@ export function AuthScene({ onAuthed }: { onAuthed: (user: User) => void }) {
     setBusy(true)
     try {
       const result = isLogin
-        ? await signIn(email.trim(), password)
-        : await signUp(email.trim(), password, displayName.trim() || email.split('@')[0])
+        ? await signIn(name, password)
+        : await signUp(name, password, displayName.trim() || name)
 
       if (result.error) {
         setError(result.error)
       } else if (result.needsConfirmation) {
-        setNotice('Check your inbox to confirm your email, then sign in.')
+        setNotice('Your account was created. Sign in to continue.')
         setIsLogin(true)
       } else if (result.user) {
         onAuthed(result.user)
@@ -110,15 +117,22 @@ export function AuthScene({ onAuthed }: { onAuthed: (user: User) => void }) {
           )}
 
           <Field
-            icon={<Mail size={15} />}
-            label="Email"
-            id="email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            placeholder="you@example.com"
-            autoComplete="email"
+            icon={<AtSign size={15} />}
+            label="Username"
+            id="username"
+            type="text"
+            value={username}
+            onChange={setUsername}
+            placeholder="yourname"
+            autoComplete="username"
             required
+            // Sign-up only. There is no address on file, so a forgotten password
+            // cannot be reset today — say so rather than implying recovery exists.
+            hint={
+              isLogin
+                ? undefined
+                : '3–30 characters: letters, digits, underscores or hyphens. No email needed — you can add a recovery email later, and until you do, a forgotten password cannot be reset.'
+            }
           />
 
           <Field
@@ -185,6 +199,7 @@ function Field({
   placeholder,
   autoComplete,
   required,
+  hint,
 }: {
   icon: React.ReactNode
   label: string
@@ -195,6 +210,7 @@ function Field({
   placeholder?: string
   autoComplete?: string
   required?: boolean
+  hint?: string
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -212,10 +228,16 @@ function Field({
           required={required}
           autoComplete={autoComplete}
           placeholder={placeholder}
+          aria-describedby={hint ? `${id}-hint` : undefined}
           onChange={(e) => onChange(e.target.value)}
           className="h-11 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted/50 focus:border-brand"
         />
       </div>
+      {hint && (
+        <p id={`${id}-hint`} className="text-[0.7rem] leading-relaxed text-muted">
+          {hint}
+        </p>
+      )}
     </div>
   )
 }
