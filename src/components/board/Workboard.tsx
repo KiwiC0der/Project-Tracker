@@ -1023,7 +1023,7 @@ function NotesPanel({ ctx }: { ctx: Ctx }) {
   return (
     <>
       <textarea
-        value={v} rows={2}
+        value={v} rows={2} name="note" aria-label="New note"
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote() } }}
         placeholder="A thought about a task, a project, anything not worth filing yet…"
