@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en" data-edition="day">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>COMPOSITOR — Project Tracker Lab</title>
+<meta name="color-scheme" content="light dark">
+<style>
+/* ===========================================================================
+   COMPOSITOR — direction 07
+   The other way to fuse WORKBENCH and BROADSHEET.
+
+   PRESS ROOM lets sheets float and overlap. This one does not: the viewport IS
+   a printed page, and panes are set into it. Nothing overlaps, nothing hides
+   behind anything, and the page is always fully composed — because a
+   half-empty page is a mistake in print, not a layout choice.
+
+   You still rearrange everything. You just do it by swapping panes and pulling
+   gutters, the way a compositor moves type around a forme.
+   =========================================================================== */
+:root {
+  --paper: #f7f4ec;
+  --paper-2: #efeade;
+  --ink: #14110c;
+  --ink-2: #4a453b;
+  --ink-3: #7d7668;
+  --red: #a4291f;
+  --rule: #cfc7b8;
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  --mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --u: 4px;
+  --gut: 13px;            /* the gutter — also the drag target width */
+  --fast: 110ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+[data-edition='dusk'] {
+  --paper: #16150f;
+  --paper-2: #1e1c15;
+  --ink: #e8e3d5;
+  --ink-2: #b3ab99;
+  --ink-3: #837c6c;
+  --red: #e0705f;
+  --rule: #3a3629;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 14px/1.45 var(--serif); -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column; overscroll-behavior: none;
+}
+:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; font-weight: 700; line-height: 1.08; }
+p { margin: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+#grain { position: fixed; inset: 0; z-index: 90; pointer-events: none; opacity: .05; mix-blend-mode: multiply; }
+[data-edition='dusk'] #grain { mix-blend-mode: screen; opacity: .035; }
+
+/* ---------- masthead ---------- */
+header.mast { flex: 0 0 auto; padding: 7px 14px 0; }
+.mast .top {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--ink-3);
+  padding-bottom: 5px;
+}
+.mast .top .sp { flex: 1 1 auto; }
+.mast .flag {
+  border-top: 2px solid var(--ink); border-bottom: 1px solid var(--ink);
+  text-align: center; padding: 5px 0 6px;
+}
+.mast .flag h1 { font-size: clamp(1.3rem, 3.4vw, 2.4rem); letter-spacing: .06em; text-transform: uppercase; }
+.mast .rule2 {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border-bottom: 3px double var(--ink); padding: 4px 0 5px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.mast .rule2 .sp { flex: 1 1 auto; }
+
+.chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  background: transparent; border: 1px solid var(--rule); border-radius: 0;
+  padding: 4px 7px; min-height: 26px; cursor: pointer; color: var(--ink-2);
+  transition: background var(--fast) linear, color var(--fast) linear;
+  white-space: nowrap;
+}
+.chip:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip[aria-pressed='true'] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip.red { color: var(--red); border-color: var(--red); }
+.chip.red:hover { background: var(--red); color: var(--paper); }
+select.chip { -webkit-appearance: none; appearance: none; padding-right: 18px; }
+
+/* ---------- the forme ---------- */
+#forme {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 0 14px 6px;
+}
+.deck { display: flex; min-height: 0; min-width: 0; }
+
+.pane {
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0; overflow: hidden;
+  background: var(--paper);
+}
+.pane.swaptarget { outline: 2px dashed var(--red); outline-offset: -3px; }
+.pane.lifted { opacity: .45; }
+
+.phead {
+  flex: 0 0 auto; display: flex; align-items: baseline; gap: 6px;
+  border-bottom: 2px solid var(--ink); padding: 5px 0 4px; margin-bottom: 7px;
+  cursor: grab; user-select: none;
+}
+.phead:active { cursor: grabbing; }
+.phead h2 {
+  font-family: var(--sans); font-size: 9px; font-weight: 700;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.phead .tally { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.phead .sp { flex: 1 1 auto; }
+.phead button {
+  border: 0; background: transparent; cursor: pointer; color: var(--ink-3);
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  width: 20px; height: 20px; display: grid; place-items: center;
+}
+.phead button:hover { background: var(--red); color: var(--paper); }
+
+.pbody { flex: 1 1 auto; overflow: auto; min-height: 0; padding-right: 2px; scrollbar-width: thin; scrollbar-color: var(--rule) transparent; }
+.pbody::-webkit-scrollbar { width: 9px; height: 9px; }
+.pbody::-webkit-scrollbar-thumb { background: var(--rule); }
+
+/* Gutters carry the column rule AND are the resize handle. In print the
+   gutter is where the rule lives, so the affordance and the ornament are the
+   same object — no extra chrome invented for the interaction. */
+.gut-v {
+  flex: 0 0 var(--gut); position: relative; cursor: col-resize;
+  display: flex; align-items: stretch; justify-content: center;
+}
+.gut-v::before { content: ''; width: 1px; background: var(--rule); }
+.gut-v:hover::before, .gut-v.active::before { background: var(--red); width: 2px; }
+
+.gut-h {
+  flex: 0 0 var(--gut); position: relative; cursor: row-resize;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.gut-h::before { content: ''; height: 1px; background: var(--rule); }
+.gut-h:hover::before, .gut-h.active::before { background: var(--red); height: 2px; }
+
+/* ---------- the case (dock) ---------- */
+#case {
+  flex: 0 0 auto; display: flex; align-items: center; gap: var(--u);
+  padding: 6px 14px; border-top: 2px solid var(--ink);
+  background: var(--paper-2); overflow-x: auto;
+}
+.sort {
+  display: flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 8px;
+  background: transparent; border: 1px solid var(--rule); border-radius: 0;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-3); cursor: pointer; white-space: nowrap;
+}
+.sort:hover { color: var(--ink); border-color: var(--ink); }
+.sort[data-set='1'] { color: var(--ink); border-color: var(--ink); background: var(--paper); }
+.sort .mark { width: 6px; height: 6px; background: var(--rule); }
+.sort[data-set='1'] .mark { background: var(--red); }
+.note { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+/* ---------- shared panel typography ---------- */
+.hd {
+  font-family: var(--sans); font-size: 9px; font-weight: 700;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--ink-3);
+  border-bottom: 1px solid var(--rule); padding-bottom: 3px; margin-bottom: 6px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 6px;
+}
+.hd .tally { font-family: var(--mono); font-weight: 400; }
+
+table.fig { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.fig th { text-align: left; font-weight: 400; color: var(--ink-2); padding: 3px 0; }
+table.fig td { text-align: right; padding: 3px 0; font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; }
+table.fig tr { border-bottom: 1px dotted var(--rule); }
+table.fig tr:last-child { border-bottom: 0; }
+table.fig td.warn { color: var(--red); }
+
+.galley { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.gcol { display: flex; flex-direction: column; min-width: 0; }
+.gdrop { display: flex; flex-direction: column; gap: 4px; min-height: 36px; padding: 2px 0; flex: 1 1 auto; }
+.gdrop.over { background: rgba(164, 41, 31, .07); outline: 1px dashed var(--red); }
+
+.cut {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: 0; border-top: 1px solid var(--rule);
+  padding: 5px 3px 6px; cursor: grab; color: var(--ink);
+}
+.cut:first-child { border-top: 0; }
+.cut:hover { background: var(--paper-2); }
+.cut.sel { background: var(--paper-2); border-left: 2px solid var(--red); padding-left: 5px; }
+.cut.overdue { border-left: 2px solid var(--red); padding-left: 5px; }
+.cut.dragging { opacity: .35; }
+.cut .t { display: block; font-size: 13px; line-height: 1.24; font-weight: 600; }
+.cut.done .t { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+.cut .d { display: block; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+.cut .d .od { color: var(--red); font-weight: 700; }
+
+.fld { margin-bottom: 8px; }
+.fld label { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 2px; }
+.fld input, .fld select, .fld textarea {
+  width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--ink);
+  border-radius: 0; padding: 4px 0; min-height: 30px; font-family: var(--serif); font-size: 13px;
+}
+.fld textarea { resize: vertical; min-height: 48px; }
+.fld select { font-family: var(--mono); font-size: 11px; }
+.fld input:focus, .fld select:focus, .fld textarea:focus { outline: none; border-bottom-color: var(--red); }
+.parse { font-family: var(--mono); font-size: 10px; color: var(--ink-3); border-top: 1px dotted var(--rule); padding-top: 5px; margin-top: 3px; min-height: 2.6em; }
+.parse b { color: var(--ink); }
+
+.tomb { padding: 5px 0; border-bottom: 1px dotted var(--rule); }
+.tomb:last-child { border-bottom: 0; }
+.tomb h4 { font-size: 12.5px; font-style: italic; font-weight: 600; }
+.tomb p { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); margin-top: 2px; }
+.tomb .acts { margin-top: 4px; display: flex; gap: 4px; }
+.tomb .chip { font-size: 9px; padding: 3px 5px; min-height: 24px; }
+
+svg.plot { width: 100%; height: auto; display: block; overflow: visible; }
+svg.plot text { font-family: var(--mono); font-size: 7px; fill: var(--ink-3); }
+svg.plot text.lbl { fill: var(--ink); font-weight: 700; }
+
+/* ---------- narrow: the forme unlocks into a single scrolling page ---------- */
+@media (max-width: 900px) {
+  html, body { overflow: auto; height: auto; }
+  #forme { display: block; padding: 0 12px 8px; }
+  .deck { display: block; }
+  .pane { min-height: 210px; margin-bottom: 14px; }
+  .gut-v, .gut-h { display: none; }
+  .galley { grid-template-columns: 1fr; }
+  .phead { cursor: default; }
+  #case { position: sticky; bottom: 0; }
+}
+
+@media print {
+  #grain, #case, .phead button, .gut-v, .gut-h { display: none !important; }
+  html, body { overflow: visible; height: auto; background: #fff; }
+  #forme { display: block; }
+  .deck { display: block; }
+  .pane { break-inside: avoid; margin-bottom: 10pt; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+.lab-back { color: var(--ink-3); text-decoration: none; font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
+.lab-back:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<svg id="grain" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <filter id="gr"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+  <rect width="100%" height="100%" filter="url(#gr)"/>
+</svg>
+
+<header class="mast">
+  <div class="top">
+    <span>Project Tracker · Variant Lab</span>
+    <span class="sp"></span>
+    <a class="lab-back" href="./index.html">← Back to the Lab</a>
+  </div>
+  <div class="flag"><h1>The Compositor</h1></div>
+  <div class="rule2">
+    <label class="sr-only" for="projSel">Section</label>
+    <select class="chip" id="projSel"></select>
+    <span id="formes" role="group" aria-label="Formes" style="display:flex;gap:4px"></span>
+    <button class="chip" id="saveForme" type="button">＋ Save forme</button>
+    <span class="sp"></span>
+    <span id="cond">—</span>
+    <button class="chip" id="dusk" type="button" aria-pressed="false">Dusk</button>
+  </div>
+</header>
+
+<div id="forme"></div>
+
+<div id="case" role="toolbar" aria-label="Set a pane into the forme"></div>
+
+<p class="sr-only" role="status" aria-live="polite" id="live"></p>
+
+<script src="_kernel.js"></script>
+<script>
+(function () {
+'use strict';
+
+var $  = function (s, r) { return (r || document).querySelector(s); };
+var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+var formeEl = $('#forme'), live = $('#live');
+var KEY = 'pt-compositor-forme';
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+function say(m) { live.textContent = m; }
+function narrow() { return window.innerWidth <= 900; }
+
+var P = {
+  galley:   { title: 'Galley',    render: rGalley },
+  schedule: { title: 'Schedule',  render: rSchedule },
+  ledger:   { title: 'Ledger',    render: rLedger },
+  copydesk: { title: 'Copy Desk', render: rCopyDesk },
+  wire:     { title: 'Wire',      render: rWire },
+  morgue:   { title: 'Morgue',    render: rMorgue },
+};
+
+/* The layout IS the page. Decks stack vertically; panes share a deck's width.
+   `h` and `w` are flex ratios, so a resize is two numbers changing and the
+   page stays exactly full — there is no geometry to clamp and nothing can
+   ever be dragged off-screen or hidden behind anything. */
+var FORMES = {
+  front: { name: 'Front Page', decks: [
+    { h: 2.1, panes: [{ id: 'galley', w: 2.4 }, { id: 'ledger', w: 1 }] },
+    { h: 1,   panes: [{ id: 'wire', w: 1 }, { id: 'morgue', w: 1.1 }] },
+  ] },
+  copy: { name: 'Copy Desk', decks: [
+    { h: 1, panes: [{ id: 'galley', w: 2.6 }, { id: 'copydesk', w: 1 }] },
+  ] },
+  press: { name: 'Press Check', decks: [
+    { h: 1.3, panes: [{ id: 'schedule', w: 1 }] },
+    { h: 1,   panes: [{ id: 'ledger', w: 1 }, { id: 'morgue', w: 1 }] },
+  ] },
+};
+
+var S = { project: null, selected: null, forme: 'front', layout: null, custom: {} };
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function paneIds() {
+  var out = [];
+  S.layout.decks.forEach(function (d) { d.panes.forEach(function (p) { out.push(p.id); }); });
+  return out;
+}
+function findPane(id) {
+  for (var i = 0; i < S.layout.decks.length; i++) {
+    for (var j = 0; j < S.layout.decks[i].panes.length; j++) {
+      if (S.layout.decks[i].panes[j].id === id) return { d: i, p: j };
+    }
+  }
+  return null;
+}
+
+/* ==========================================================================
+   COMPOSE — build the page from the layout
+   ========================================================================== */
+function compose() {
+  formeEl.innerHTML = '';
+  S.layout.decks.forEach(function (deck, di) {
+    if (di > 0 && !narrow()) {
+      var gh = document.createElement('div');
+      gh.className = 'gut-h';
+      gh.setAttribute('role', 'separator');
+      gh.setAttribute('aria-orientation', 'horizontal');
+      gh.setAttribute('aria-label', 'Deck height');
+      gh.tabIndex = 0;
+      wireGutH(gh, di);
+      formeEl.appendChild(gh);
+    }
+    var dEl = document.createElement('div');
+    dEl.className = 'deck';
+    dEl.style.flex = deck.h + ' 1 0';
+
+    deck.panes.forEach(function (pn, pi) {
+      if (pi > 0 && !narrow()) {
+        var gv = document.createElement('div');
+        gv.className = 'gut-v';
+        gv.setAttribute('role', 'separator');
+        gv.setAttribute('aria-orientation', 'vertical');
+        gv.setAttribute('aria-label', 'Column width');
+        gv.tabIndex = 0;
+        wireGutV(gv, di, pi);
+        dEl.appendChild(gv);
+      }
+      dEl.appendChild(buildPane(pn, di, pi));
+    });
+    formeEl.appendChild(dEl);
+  });
+  paintAll();
+  syncCase();
+}
+
+function buildPane(pn, di, pi) {
+  var def = P[pn.id];
+  var el = document.createElement('section');
+  el.className = 'pane';
+  el.dataset.pane = pn.id;
+  el.style.flex = pn.w + ' 1 0';
+  el.setAttribute('role', 'region');
+  el.setAttribute('aria-label', def.title + ' pane');
+  el.innerHTML =
+    '<div class="phead"><h2>' + esc(def.title) + '</h2><span class="tally" data-tally></span>' +
+      '<span class="sp"></span>' +
+      '<button type="button" class="x" aria-label="Lift ' + esc(def.title) + ' out of the forme">✕</button>' +
+    '</div><div class="pbody" data-body></div>';
+
+  $('.x', el).addEventListener('click', function (e) { e.stopPropagation(); lift(pn.id); });
+  wireSwap(el, pn.id);
+  return el;
+}
+
+/* --- swap: drag one pane's head onto another ---------------------------- */
+function wireSwap(el, id) {
+  var head = $('.phead', el);
+  var drag = null;
+
+  head.addEventListener('pointerdown', function (e) {
+    if (narrow() || e.target.closest('button')) return;
+    drag = { moved: false };
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (!drag.moved) { drag.moved = true; el.classList.add('lifted'); }
+    $$('.pane').forEach(function (p) { p.classList.remove('swaptarget'); });
+    var over = paneUnder(e.clientX, e.clientY);
+    if (over && over !== el) over.classList.add('swaptarget');
+  });
+  function end(e) {
+    if (!drag) return;
+    var moved = drag.moved;
+    drag = null;
+    el.classList.remove('lifted');
+    $$('.pane').forEach(function (p) { p.classList.remove('swaptarget'); });
+    if (e && e.pointerId != null) { try { head.releasePointerCapture(e.pointerId); } catch (x) {} }
+    if (!moved || !e) return;
+    var over = paneUnder(e.clientX, e.clientY);
+    if (over && over !== el) swap(id, over.dataset.pane);
+  }
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+
+  /* Keyboard equivalent — a drag-only interaction would strand keyboard users. */
+  head.tabIndex = 0;
+  head.addEventListener('keydown', function (e) {
+    if (!e.altKey) return;
+    var pos = findPane(id); if (!pos) return;
+    var deck = S.layout.decks[pos.d], target = null;
+    if (e.key === 'ArrowRight' && deck.panes[pos.p + 1]) target = deck.panes[pos.p + 1].id;
+    else if (e.key === 'ArrowLeft' && deck.panes[pos.p - 1]) target = deck.panes[pos.p - 1].id;
+    else if (e.key === 'ArrowDown' && S.layout.decks[pos.d + 1]) target = S.layout.decks[pos.d + 1].panes[0].id;
+    else if (e.key === 'ArrowUp' && S.layout.decks[pos.d - 1]) target = S.layout.decks[pos.d - 1].panes[0].id;
+    if (!target) return;
+    e.preventDefault();
+    swap(id, target);
+    // Focus follows the pane, not the position.
+    var moved = $('[data-pane="' + id + '"] .phead');
+    if (moved) moved.focus();
+  });
+}
+
+function paneUnder(x, y) {
+  var hit = null;
+  $$('.pane').forEach(function (p) {
+    var r = p.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) hit = p;
+  });
+  return hit;
+}
+
+function swap(a, b) {
+  var pa = findPane(a), pb = findPane(b);
+  if (!pa || !pb) return;
+  var A = S.layout.decks[pa.d].panes[pa.p];
+  var B = S.layout.decks[pb.d].panes[pb.p];
+  var tmp = A.id; A.id = B.id; B.id = tmp;   // swap contents, keep the widths
+  compose(); save();
+  say(P[a].title + ' swapped with ' + P[b].title);
+}
+
+/* --- gutters ------------------------------------------------------------ */
+function wireGutV(g, di, pi) {
+  var st = null;
+  g.addEventListener('pointerdown', function (e) {
+    var deck = S.layout.decks[di];
+    st = { x: e.clientX, a: deck.panes[pi - 1].w, b: deck.panes[pi].w, total: g.parentNode.getBoundingClientRect().width };
+    g.classList.add('active'); g.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  g.addEventListener('pointermove', function (e) {
+    if (!st) return;
+    var deck = S.layout.decks[di];
+    var sum = st.a + st.b;
+    var frac = (e.clientX - st.x) / Math.max(1, st.total) * sum;
+    var a = PT.clamp(st.a + frac, sum * 0.18, sum * 0.82);
+    deck.panes[pi - 1].w = a;
+    deck.panes[pi].w = sum - a;
+    // Cheap: only two flex values change, so nothing needs rebuilding.
+    var panes = $$('.pane', g.parentNode);
+    panes[pi - 1].style.flex = deck.panes[pi - 1].w + ' 1 0';
+    panes[pi].style.flex = deck.panes[pi].w + ' 1 0';
+  });
+  function end(e) {
+    if (!st) return;
+    st = null; g.classList.remove('active'); save();
+    if (e && e.pointerId != null) { try { g.releasePointerCapture(e.pointerId); } catch (x) {} }
+  }
+  g.addEventListener('pointerup', end);
+  g.addEventListener('pointercancel', end);
+  g.addEventListener('keydown', function (e) {
+    var deck = S.layout.decks[di], step = 0;
+    if (e.key === 'ArrowLeft') step = -0.12;
+    else if (e.key === 'ArrowRight') step = 0.12;
+    else return;
+    e.preventDefault();
+    var sum = deck.panes[pi - 1].w + deck.panes[pi].w;
+    var a = PT.clamp(deck.panes[pi - 1].w + step, sum * 0.18, sum * 0.82);
+    deck.panes[pi - 1].w = a; deck.panes[pi].w = sum - a;
+    compose(); save();
+    var gs = $$('.gut-v'); if (gs[0]) gs[Math.min(gs.length - 1, 0)].focus();
+  });
+}
+
+function wireGutH(g, di) {
+  var st = null;
+  g.addEventListener('pointerdown', function (e) {
+    st = { y: e.clientY, a: S.layout.decks[di - 1].h, b: S.layout.decks[di].h, total: formeEl.getBoundingClientRect().height };
+    g.classList.add('active'); g.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  g.addEventListener('pointermove', function (e) {
+    if (!st) return;
+    var sum = st.a + st.b;
+    var frac = (e.clientY - st.y) / Math.max(1, st.total) * sum;
+    var a = PT.clamp(st.a + frac, sum * 0.18, sum * 0.82);
+    S.layout.decks[di - 1].h = a;
+    S.layout.decks[di].h = sum - a;
+    var decks = $$('.deck');
+    decks[di - 1].style.flex = a + ' 1 0';
+    decks[di].style.flex = (sum - a) + ' 1 0';
+  });
+  function end(e) {
+    if (!st) return;
+    st = null; g.classList.remove('active'); save();
+    if (e && e.pointerId != null) { try { g.releasePointerCapture(e.pointerId); } catch (x) {} }
+  }
+  g.addEventListener('pointerup', end);
+  g.addEventListener('pointercancel', end);
+  g.addEventListener('keydown', function (e) {
+    var step = e.key === 'ArrowUp' ? -0.12 : e.key === 'ArrowDown' ? 0.12 : 0;
+    if (!step) return;
+    e.preventDefault();
+    var sum = S.layout.decks[di - 1].h + S.layout.decks[di].h;
+    var a = PT.clamp(S.layout.decks[di - 1].h + step, sum * 0.18, sum * 0.82);
+    S.layout.decks[di - 1].h = a; S.layout.decks[di].h = sum - a;
+    compose(); save();
+  });
+}
+
+/* --- setting and lifting panes ------------------------------------------ */
+function setIn(id) {
+  if (findPane(id)) return;
+  // Into the deck with the fewest panes; a new deck if every deck is full.
+  var best = -1, n = 99;
+  S.layout.decks.forEach(function (d, i) { if (d.panes.length < n) { n = d.panes.length; best = i; } });
+  if (n >= 3 || best < 0) S.layout.decks.push({ h: 1, panes: [{ id: id, w: 1 }] });
+  else S.layout.decks[best].panes.push({ id: id, w: 1 });
+  compose(); save();
+  say(P[id].title + ' set into the forme');
+}
+
+function lift(id) {
+  var pos = findPane(id); if (!pos) return;
+  var deck = S.layout.decks[pos.d];
+  deck.panes.splice(pos.p, 1);
+  if (!deck.panes.length) S.layout.decks.splice(pos.d, 1);
+  // A page with nothing on it is not a page.
+  if (!S.layout.decks.length) S.layout.decks.push({ h: 1, panes: [{ id: 'galley', w: 1 }] });
+  compose(); save();
+  say(P[id].title + ' lifted out');
+}
+
+/* ==========================================================================
+   PANEL BODIES — same six as PRESS ROOM, so the two are a fair comparison
+   ========================================================================== */
+function bodyOf(id) {
+  var p = $('[data-pane="' + id + '"]');
+  return p ? $('[data-body]', p) : null;
+}
+function tallyOf(id) {
+  var p = $('[data-pane="' + id + '"]');
+  return p ? $('[data-tally]', p) : null;
+}
+function paint(id) { var b = bodyOf(id); if (b && P[id]) P[id].render(b); }
+function paintAll() { paneIds().forEach(paint); }
+
+var COLS = [{ id: 'todo', name: 'Standing' }, { id: 'doing', name: 'On the stone' }, { id: 'done', name: 'Printed' }];
+
+function rGalley(c) {
+  var ts = PT.tasks({ project: S.project }), now = Date.now();
+  var t = tallyOf('galley'); if (t) t.textContent = ts.length;
+
+  c.innerHTML = '<div class="galley">' + COLS.map(function (col) {
+    var items = ts.filter(function (x) { return x.status === col.id; });
+    return '<div class="gcol"><div class="hd">' + esc(col.name) + '<span class="tally">' + items.length + '</span></div>' +
+      '<div class="gdrop" data-drop="' + col.id + '" role="list" aria-label="' + esc(col.name) + '">' +
+      items.map(function (x) {
+        var od = x.due && x.due < now && x.status !== 'done';
+        return '<button type="button" role="listitem" draggable="true" data-task="' + x.id + '" ' +
+          'class="cut' + (S.selected === x.id ? ' sel' : '') + (od ? ' overdue' : '') + (x.status === 'done' ? ' done' : '') + '">' +
+          '<span class="t">' + esc(x.title) + '</span><span class="d">' + esc(x.priority) + ' · ' + esc(x.estimate) + 'h' +
+          (x.due ? ' · <span class="' + (od ? 'od' : '') + '">' + esc(od ? 'OVERDUE ' + PT.relDay(x.due) : PT.relDay(x.due)) + '</span>' : '') +
+          '</span></button>';
+      }).join('') + '</div></div>';
+  }).join('') + '</div>';
+
+  $$('[data-task]', c).forEach(function (b) {
+    b.addEventListener('click', function () { sel(b.dataset.task); });
+    b.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/plain', b.dataset.task);
+      e.dataTransfer.effectAllowed = 'move';
+      b.classList.add('dragging'); sel(b.dataset.task);
+    });
+    b.addEventListener('dragend', function () { b.classList.remove('dragging'); });
+  });
+  $$('[data-drop]', c).forEach(function (z) {
+    z.addEventListener('dragover', function (e) { e.preventDefault(); z.classList.add('over'); });
+    z.addEventListener('dragleave', function () { z.classList.remove('over'); });
+    z.addEventListener('drop', function (e) {
+      e.preventDefault(); z.classList.remove('over');
+      var id = e.dataTransfer.getData('text/plain');
+      if (id) { PT.moveTask(id, z.dataset.drop); say('Moved'); }
+    });
+  });
+}
+
+function sel(id) { S.selected = id; paintAll(); var t = PT.task(id); if (t) say('Selected ' + t.title); }
+
+function rSchedule(c) {
+  var ts = PT.tasks({ project: S.project });
+  var tl = tallyOf('schedule'); if (tl) tl.textContent = ts.length;
+  if (!ts.length) { c.innerHTML = '<p class="note">Nothing scheduled.</p>'; return; }
+  var now = Date.now();
+  var t0 = Math.min.apply(null, ts.map(function (t) { return t.createdAt; }).concat([now - 3 * PT.DAY]));
+  var t1 = Math.max.apply(null, ts.map(function (t) { return t.due || t.doneAt || t.createdAt + 6 * PT.DAY; }).concat([now + 7 * PT.DAY]));
+  var span = Math.max(1, t1 - t0), W = 900, ROW = 18, H = ts.length * ROW + 22;
+  var x = function (v) { return ((v - t0) / span) * (W - 210) + 200; };
+
+  var grid = '', d = new Date(t0); d.setHours(0, 0, 0, 0);
+  while (d.getTime() < t1) {
+    var gx = x(d.getTime());
+    if (gx > 198) grid += '<line x1="' + gx.toFixed(1) + '" x2="' + gx.toFixed(1) + '" y1="13" y2="' + (H - 4) +
+      '" stroke="var(--rule)" stroke-width=".5"/><text x="' + gx.toFixed(1) + '" y="9">' + esc(PT.shortDate(d.getTime())) + '</text>';
+    d = new Date(d.getTime() + 7 * PT.DAY);
+  }
+  var bars = ts.map(function (t, i) {
+    var y = 19 + i * ROW, a = x(t.createdAt);
+    var b = x(t.due || t.doneAt || t.createdAt + (t.estimate || 2) * 3 * PT.DAY);
+    var od = t.due && t.due < now && t.status !== 'done';
+    var fill = t.status === 'done' ? 'var(--rule)' : od ? 'var(--red)' : 'var(--ink)';
+    var op = t.status === 'todo' ? .42 : 1;
+    var label = t.title.length > 32 ? t.title.slice(0, 31) + '…' : t.title;
+    return '<g class="grow" data-task="' + t.id + '" style="cursor:pointer">' +
+      '<rect x="0" y="' + (y - 7) + '" width="' + W + '" height="' + (ROW - 2) + '" fill="' +
+        (S.selected === t.id ? 'rgba(164,41,31,.09)' : 'transparent') + '"/>' +
+      '<text x="2" y="' + (y + 3) + '" fill="var(--ink-2)" font-size="9">' + esc(label) + '</text>' +
+      '<rect x="' + Math.min(a, b).toFixed(1) + '" y="' + (y - 3) + '" width="' +
+        Math.max(3, Math.abs(b - a)).toFixed(1) + '" height="6" fill="' + fill + '" opacity="' + op + '"/></g>';
+  }).join('');
+  var nx = x(now);
+  c.innerHTML = '<svg class="plot" viewBox="0 0 ' + W + ' ' + H + '" style="min-width:600px" role="img" ' +
+    'aria-label="Schedule of ' + ts.length + ' items">' + grid +
+    '<line x1="' + nx.toFixed(1) + '" x2="' + nx.toFixed(1) + '" y1="11" y2="' + (H - 4) + '" stroke="var(--red)" stroke-width="1"/>' +
+    '<text class="lbl" x="' + (nx + 3).toFixed(1) + '" y="9" fill="var(--red)">today</text>' + bars + '</svg>' +
+    '<p class="note" style="margin-top:5px">Solid = on the stone · faint = standing · red = past due · grey = printed</p>';
+  $$('.grow', c).forEach(function (g) { g.addEventListener('click', function () { sel(g.dataset.task); }); });
+}
+
+function rLedger(c) {
+  var s = PT.stats(S.project), m = PT.momentum(), f = PT.forecast(S.project);
+  var landing = f.done ? 'complete' : !isFinite(f.days) ? 'no measurable pace' : PT.shortDate(f.date.getTime());
+  var trend = m.trend > .15 ? 'rising' : m.trend < -.15 ? 'falling' : 'steady';
+  var row = function (k, v, w) { return '<tr><th scope="row">' + esc(k) + '</th><td class="' + (w ? 'warn' : '') + '">' + esc(v) + '</td></tr>'; };
+  var tl = tallyOf('ledger'); if (tl) tl.textContent = s.pct + '%';
+
+  var series = PT.timeline(30), plot = '';
+  if (series.length > 1) {
+    var W = 280, H = 70, PL = 20, PB = 11, PTp = 5;
+    var max = Math.max(1, Math.max.apply(null, series.map(function (d) { return d.total; })));
+    var xx = function (i) { return PL + (i / (series.length - 1)) * (W - PL - 4); };
+    var yy = function (v) { return PTp + (1 - v / max) * (H - PTp - PB); };
+    var open = series.map(function (d, i) { return (i ? 'L' : 'M') + xx(i).toFixed(1) + ' ' + yy(d.open).toFixed(1); }).join(' ');
+    var done = series.map(function (d, i) { return (i ? 'L' : 'M') + xx(i).toFixed(1) + ' ' + yy(d.done).toFixed(1); }).join(' ');
+    var last = series[series.length - 1];
+    plot = '<svg class="plot" viewBox="0 0 ' + W + ' ' + H + '" style="margin-top:8px" role="img" ' +
+      'aria-label="' + last.open + ' open and ' + last.done + ' printed over thirty days">' +
+      '<line x1="' + PL + '" x2="' + (W - 4) + '" y1="' + yy(0) + '" y2="' + yy(0) + '" stroke="var(--rule)" stroke-width=".5"/>' +
+      '<line x1="' + PL + '" x2="' + (W - 4) + '" y1="' + yy(max) + '" y2="' + yy(max) + '" stroke="var(--rule)" stroke-width=".5"/>' +
+      '<text x="' + (PL - 3) + '" y="' + (yy(max) + 2.5) + '" text-anchor="end">' + max + '</text>' +
+      '<text x="' + (PL - 3) + '" y="' + (yy(0) + 2.5) + '" text-anchor="end">0</text>' +
+      '<path d="' + open + '" fill="none" stroke="var(--red)" stroke-width="1.2"/>' +
+      '<path d="' + done + '" fill="none" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"/>' +
+      '<text class="lbl" x="' + (W - 5) + '" y="' + (yy(last.open) - 3) + '" text-anchor="end">open ' + last.open + '</text>' +
+      '<text class="lbl" x="' + (W - 5) + '" y="' + (yy(last.done) + 8) + '" text-anchor="end">printed ' + last.done + '</text></svg>' +
+      '<p class="note">Thirty days</p>';
+  }
+
+  c.innerHTML = '<div class="hd">By the numbers</div><table class="fig"><tbody>' +
+    row('Standing', s.todo) + row('On the stone', s.doing) + row('Printed', s.done + ' / ' + s.total) +
+    row('Past due', s.overdue, s.overdue > 0) + row('Hours out', s.hoursLeft + 'h') +
+    row('Complete', s.pct + '%') + row('Pace', m.perWeek + '/wk') + row('Trend', trend, m.trend < -.15) +
+    row('Goes to press', landing, !isFinite(f.days)) + '</tbody></table>' + plot +
+    '<p style="margin-top:9px"><button class="chip red" id="rst" type="button">Reset the archive</button></p>';
+
+  $('#rst', c).addEventListener('click', function () {
+    PT.reset(); S.project = PT.projects()[0] ? PT.projects()[0].id : null; S.selected = null;
+    projects(); say('Reset');
+  });
+}
+
+function rCopyDesk(c) {
+  var t = S.selected ? PT.task(S.selected) : null;
+  var tl = tallyOf('copydesk'); if (tl) tl.textContent = t ? '' : 'none selected';
+  if (!t) { c.innerHTML = '<p class="note">Select an item in the galley or schedule.</p>'; return; }
+  var opt = function (v, cur) { return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + v + '</option>'; };
+
+  c.innerHTML =
+    '<div class="fld"><label for="f-t">Headline</label><input id="f-t" value="' + esc(t.title) + '"></div>' +
+    '<div class="fld"><label for="f-n">Notes</label><textarea id="f-n" placeholder="Nothing marked up">' + esc(t.notes) + '</textarea></div>' +
+    '<div class="fld"><label for="f-s">Status</label><select id="f-s">' + ['todo','doing','done'].map(function (v) { return opt(v, t.status); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-p">Priority</label><select id="f-p">' + ['low','medium','high'].map(function (v) { return opt(v, t.priority); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-e">Energy</label><select id="f-e">' + ['deep','shallow','admin'].map(function (v) { return opt(v, t.energy); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-h">Estimate (hours)</label><input id="f-h" type="number" min="0.5" step="0.5" value="' + esc(t.estimate) + '"></div>' +
+    '<div class="fld"><label for="f-d">Due</label><input id="f-d" type="date" value="' + (t.due ? new Date(t.due).toISOString().slice(0, 10) : '') + '"></div>' +
+    '<table class="fig"><tbody>' +
+      '<tr><th scope="row">Staleness</th><td class="' + (PT.staleness(t) > .4 ? 'warn' : '') + '">' + Math.round(PT.staleness(t) * 100) + '%</td></tr>' +
+      '<tr><th scope="row">Rank</th><td>' + PT.score(t) + '</td></tr>' +
+      '<tr><th scope="row">Filed</th><td>' + esc(PT.shortDate(t.createdAt)) + '</td></tr></tbody></table>' +
+    '<p style="margin-top:9px"><button class="chip red" id="f-x" type="button">Spike this item</button></p>';
+
+  var bind = function (s, prop, xf) {
+    $(s, c).addEventListener('change', function () {
+      var o = {}; o[prop] = xf ? xf(this.value) : this.value;
+      PT.patchTask(t.id, o); say('Updated ' + prop);
+    });
+  };
+  bind('#f-t', 'title'); bind('#f-n', 'notes'); bind('#f-p', 'priority'); bind('#f-e', 'energy');
+  bind('#f-h', 'estimate', function (v) { return parseFloat(v) || 1; });
+  bind('#f-d', 'due', function (v) { return v ? new Date(v + 'T17:00:00').getTime() : null; });
+  $('#f-s', c).addEventListener('change', function () { PT.moveTask(t.id, this.value); });
+  $('#f-x', c).addEventListener('click', function () { PT.removeTask(t.id); S.selected = null; say('Spiked'); });
+}
+
+function rWire(c) {
+  var n = PT.nextAction(S.project);
+  var tl = tallyOf('wire'); if (tl) tl.textContent = '';
+  c.innerHTML =
+    (n ? '<div class="hd">The lead</div><p style="font-size:14px;font-weight:600;line-height:1.25">' + esc(n.task.title) + '</p>' +
+         '<p class="note" style="margin:3px 0 8px">' + esc(n.why) + '</p>' +
+         '<p style="margin-bottom:10px"><button class="chip" id="w-n" type="button">' +
+         (n.task.status === 'doing' ? 'Send to press' : 'Put it on the stone') + '</button></p>' : '') +
+    '<div class="hd">File an item</div>' +
+    '<div class="fld"><label class="sr-only" for="w-i">File an item</label>' +
+      '<input id="w-i" placeholder="rewrite the composer !high @fri #ui ~4h /redesign" autocomplete="off"></div>' +
+    '<p class="parse" id="w-p">!high · @fri · #tag · ~4h · /project · *deep</p>' +
+    '<button class="chip" id="w-a" type="button">File it</button>';
+
+  var i = $('#w-i', c), p = $('#w-p', c);
+  function prev() {
+    var v = i.value.trim();
+    if (!v) { p.innerHTML = '!high · @fri · #tag · ~4h · /project · *deep'; return; }
+    var q = PT.parse(v), proj = PT.project(q.projectId || S.project);
+    p.innerHTML = 'Files <b>' + esc(q.title || '(no headline)') + '</b> · ' + esc(q.priority) + ' · ' +
+      esc(q.due ? PT.relDay(q.due) : 'no date') + ' · ' + esc(q.estimate) + 'h · ' + esc(q.energy) +
+      (q.tags.length ? ' · #' + q.tags.map(esc).join(' #') : '') + ' · <b>' + esc(proj ? proj.name : '?') + '</b>';
+  }
+  function go() {
+    var t = PT.quickAdd(i.value.trim(), S.project);
+    if (!t) { say('Nothing to file'); return; }
+    i.value = ''; prev(); sel(t.id); say('Filed ' + t.title);
+  }
+  i.addEventListener('input', prev);
+  i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  $('#w-a', c).addEventListener('click', go);
+  var nb = $('#w-n', c);
+  if (nb) nb.addEventListener('click', function () {
+    PT.moveTask(n.task.id, n.task.status === 'doing' ? 'done' : 'doing');
+    sel(n.task.id);
+  });
+}
+
+function rMorgue(c) {
+  var dead = PT.tasks({}).filter(function (t) { return t.status !== 'done' && PT.staleness(t) > .18; })
+    .sort(function (a, b) { return PT.staleness(b) - PT.staleness(a); }).slice(0, 8);
+  var tl = tallyOf('morgue'); if (tl) tl.textContent = dead.length;
+  c.innerHTML = dead.length
+    ? '<p class="note" style="margin-bottom:5px">Items untouched long enough to be presumed lost.</p>' +
+      dead.map(function (t) {
+        var pr = PT.project(t.projectId);
+        return '<div class="tomb"><h4>' + esc(t.title) + '</h4><p>' + esc(pr ? pr.name : '') + ' · untouched ' +
+          Math.floor((Date.now() - t.touchedAt) / PT.DAY) + ' days · ' + Math.round(PT.staleness(t) * 100) + '% gone</p>' +
+          '<div class="acts"><button class="chip" data-rev="' + t.id + '" type="button">Revive</button>' +
+          '<button class="chip red" data-let="' + t.id + '" type="button">Let go</button></div></div>';
+      }).join('')
+    : '<p class="note">Nothing has been left to rot.</p>';
+  $$('[data-rev]', c).forEach(function (b) {
+    b.addEventListener('click', function () { PT.patchTask(b.dataset.rev, { status: 'doing' }); say('Revived'); });
+  });
+  $$('[data-let]', c).forEach(function (b) {
+    b.addEventListener('click', function () { PT.removeTask(b.dataset.let); say('Let go'); });
+  });
+}
+
+/* ==========================================================================
+   FORMES + CHROME
+   ========================================================================== */
+function allFormes() {
+  var o = {};
+  Object.keys(FORMES).forEach(function (k) { o[k] = FORMES[k]; });
+  Object.keys(S.custom).forEach(function (k) { o[k] = S.custom[k]; });
+  return o;
+}
+
+function setForme(k) {
+  var f = allFormes()[k]; if (!f) return;
+  S.forme = k;
+  S.layout = clone({ decks: f.decks });
+  compose(); formeRail(); save();
+  say(f.name + ' forme');
+}
+
+function formeRail() {
+  var all = allFormes();
+  $('#formes').innerHTML = Object.keys(all).map(function (k) {
+    return '<button class="chip" type="button" data-f="' + esc(k) + '" aria-pressed="' +
+      (S.forme === k ? 'true' : 'false') + '">' + esc(all[k].name) + '</button>';
+  }).join('');
+  $$('#formes [data-f]').forEach(function (b) {
+    b.addEventListener('click', function () { setForme(b.dataset.f); });
+    b.addEventListener('contextmenu', function (e) {
+      if (!S.custom[b.dataset.f]) return;
+      e.preventDefault();
+      delete S.custom[b.dataset.f];
+      if (S.forme === b.dataset.f) S.forme = 'front';
+      formeRail(); save(); say('Forme removed');
+    });
+  });
+}
+
+$('#saveForme').addEventListener('click', function () {
+  var name = window.prompt('Name this forme');
+  if (!name || !name.trim()) return;
+  var key = 'u_' + name.trim().toLowerCase().replace(/\W+/g, '_');
+  S.custom[key] = { name: name.trim(), decks: clone(S.layout.decks) };
+  S.forme = key; formeRail(); save();
+  say('Saved forme ' + name.trim() + '. Right-click a saved forme to remove it.');
+});
+
+function syncCase() {
+  var c = $('#case');
+  if (!c.childElementCount) {
+    c.innerHTML = Object.keys(P).map(function (id) {
+      return '<button class="sort" type="button" data-sort="' + id + '"><span class="mark"></span>' + esc(P[id].title) + '</button>';
+    }).join('') + '<span style="flex:1 1 auto"></span>' +
+      '<span class="note">Drag a pane head onto another to swap · Alt+arrows from the keyboard · pull a gutter to resize</span>';
+    $$('[data-sort]', c).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.dataset.sort;
+        if (findPane(id)) lift(id); else setIn(id);
+      });
+    });
+  }
+  $$('[data-sort]', c).forEach(function (b) { b.dataset.set = findPane(b.dataset.sort) ? '1' : '0'; });
+}
+
+function projects() {
+  var ps = PT.projects();
+  if (!ps.length) S.project = null;
+  else if (!PT.project(S.project)) S.project = ps[0].id;
+  $('#projSel').innerHTML = ps.map(function (p) {
+    return '<option value="' + p.id + '"' + (p.id === S.project ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+  }).join('');
+  conditions(); paintAll();
+}
+
+function conditions() {
+  var ps = PT.projects();
+  if (!ps.length) { $('#cond').textContent = 'No sections'; return; }
+  var avg = ps.reduce(function (a, p) { return a + PT.health(p.id); }, 0) / ps.length;
+  var word = avg > .72 ? 'Clear' : avg > .55 ? 'Fair' : avg > .42 ? 'Unsettled' : 'Heavy weather';
+  var s = PT.stats();
+  $('#cond').textContent = word + ' · ' + s.overdue + ' past due · ' + s.hoursLeft + 'h out';
+}
+
+$('#projSel').addEventListener('change', function () {
+  S.project = this.value; S.selected = null; paintAll(); save();
+});
+
+$('#dusk').addEventListener('click', function () {
+  var d = document.documentElement.dataset.edition === 'dusk';
+  document.documentElement.dataset.edition = d ? 'day' : 'dusk';
+  this.setAttribute('aria-pressed', String(!d));
+  try { localStorage.setItem('pt-compositor-dusk', d ? '0' : '1'); } catch (e) {}
+});
+
+addEventListener('keydown', function (e) {
+  var ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+  if (!S.selected) return;
+  var t = PT.task(S.selected); if (!t) return;
+  var order = ['todo', 'doing', 'done'], i = order.indexOf(t.status);
+  if (e.key === ']') { e.preventDefault(); PT.moveTask(t.id, order[Math.min(2, i + 1)]); }
+  else if (e.key === '[') { e.preventDefault(); PT.moveTask(t.id, order[Math.max(0, i - 1)]); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault(); PT.removeTask(t.id); S.selected = null; say('Spiked ' + t.title);
+  }
+});
+
+/* ==========================================================================
+   PERSISTENCE + BOOT
+   ========================================================================== */
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify({ layout: S.layout, forme: S.forme, custom: S.custom, project: S.project })); }
+  catch (e) { /* private mode — the forme just won't survive a reload */ }
+}
+
+function load() {
+  try {
+    var raw = localStorage.getItem(KEY); if (!raw) return false;
+    var s = JSON.parse(raw);
+    if (!s || !s.layout || !s.layout.decks || !s.layout.decks.length) return false;
+    // Drop any pane id this build no longer knows about.
+    s.layout.decks.forEach(function (d) { d.panes = d.panes.filter(function (p) { return !!P[p.id]; }); });
+    s.layout.decks = s.layout.decks.filter(function (d) { return d.panes.length; });
+    if (!s.layout.decks.length) return false;
+    S.layout = s.layout; S.forme = s.forme || 'front'; S.custom = s.custom || {};
+    if (s.project && PT.project(s.project)) S.project = s.project;
+    return true;
+  } catch (e) { return false; }
+}
+
+var rt = 0;
+addEventListener('resize', function () {
+  clearTimeout(rt);
+  // Only a full recompose adds/removes gutters at the narrow breakpoint.
+  rt = setTimeout(compose, 140);
+});
+
+PT.on('change', function () { conditions(); paintAll(); });
+
+try { if (localStorage.getItem('pt-compositor-dusk') === '1') {
+  document.documentElement.dataset.edition = 'dusk';
+  $('#dusk').setAttribute('aria-pressed', 'true');
+} } catch (e) {}
+
+// The layout has to exist before anything paints — projects() paints, and
+// every paint walks S.layout.decks.
+if (!load()) S.layout = clone({ decks: FORMES.front.decks });
+projects();
+formeRail();
+compose();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1412 @@
+<!doctype html>
+<html lang="en" data-edition="day">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>COMPOSING ROOM — Project Tracker Lab</title>
+<meta name="color-scheme" content="light dark">
+<style>
+/* ===========================================================================
+   COMPOSING ROOM — direction 08
+   PRESS ROOM and COMPOSITOR in one file, switched by a radio.
+
+   In a real composing room the stone is where loose type is arranged by hand,
+   and the forme is that same type locked up so nothing can shift. Same
+   material, two states. That is exactly the toggle:
+
+     LOOSE   — sheets float, overlap, snap to edges, can be set aside
+     LOCKED  — panes tile into a page, nothing overlaps, the page is always full
+
+   The switch is lossless in both directions. LOCKED -> LOOSE hands you the
+   page you were just looking at, unlocked in place, so nothing jumps.
+
+   Header is PRESS ROOM's standing head, not COMPOSITOR's masthead.
+   =========================================================================== */
+:root {
+  --paper: #f7f4ec;
+  --paper-2: #efeade;
+  --table: #ddd7c7;
+  --ink: #14110c;
+  --ink-2: #4a453b;
+  --ink-3: #7d7668;
+  --red: #a4291f;
+  --rule: #cfc7b8;
+  --offset: rgba(20, 17, 12, 0.16);
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  --mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --u: 4px;
+  --bar: 34px;
+  --dock: 44px;
+  --gut: 13px;
+  --min-w: 210px;          /* shared by .sheet and .pane — see the note there */
+  --min-h: 130px;
+  --fast: 110ms;
+  --mid: 190ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+[data-edition='dusk'] {
+  --paper: #16150f;
+  --paper-2: #1e1c15;
+  --table: #0e0d09;
+  --ink: #e8e3d5;
+  --ink-2: #b3ab99;
+  --ink-3: #837c6c;
+  --red: #e0705f;
+  --rule: #3a3629;
+  --offset: rgba(0, 0, 0, 0.5);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  margin: 0; background: var(--table); color: var(--ink);
+  font: 14px/1.45 var(--serif); -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+/* In LOCKED the board is the page, so the page colour is the background. */
+body[data-mode='locked'] { background: var(--paper); }
+
+:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; font-weight: 700; line-height: 1.1; }
+p { margin: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+#table {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(to right, rgba(20,17,12,.045) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(to bottom, rgba(20,17,12,.045) 0 1px, transparent 1px 48px),
+    var(--table);
+  transition: opacity var(--mid) linear;
+}
+[data-edition='dusk'] #table {
+  background:
+    repeating-linear-gradient(to right, rgba(255,255,255,.035) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(to bottom, rgba(255,255,255,.035) 0 1px, transparent 1px 48px),
+    var(--table);
+}
+body[data-mode='locked'] #table { opacity: 0; }
+
+#grain { position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .05; mix-blend-mode: multiply; }
+[data-edition='dusk'] #grain { mix-blend-mode: screen; opacity: .035; }
+
+/* ---------- standing head (PRESS ROOM's, as asked) ---------- */
+#head {
+  position: fixed; top: 0; left: 0; right: 0; height: var(--bar); z-index: 60;
+  display: flex; align-items: center; gap: calc(var(--u) * 2);
+  padding: 0 calc(var(--u) * 2);
+  background: var(--paper); border-bottom: 2px solid var(--ink);
+  font-family: var(--mono); font-size: 11px;
+}
+#head .flag {
+  font-family: var(--serif); font-weight: 700; font-size: 15px;
+  letter-spacing: .02em; text-transform: uppercase;
+  padding-right: calc(var(--u) * 2); border-right: 1px solid var(--rule);
+  white-space: nowrap;
+}
+#head .sp { flex: 1 1 auto; }
+#head select {
+  background: transparent; border: 1px solid var(--rule); border-radius: 0;
+  padding: 3px 5px; font-family: var(--mono); font-size: 11px; min-height: 26px;
+}
+#head select:focus { border-color: var(--red); outline: none; }
+
+.chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  background: transparent; border: 1px solid var(--rule); border-radius: 0;
+  padding: 5px 8px; min-height: 26px; cursor: pointer; color: var(--ink-2);
+  transition: background var(--fast) linear, color var(--fast) linear;
+  white-space: nowrap;
+}
+.chip:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip[aria-pressed='true'] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chip.red { color: var(--red); border-color: var(--red); }
+.chip.red:hover { background: var(--red); color: var(--paper); }
+.rail { display: flex; gap: var(--u); align-items: center; }
+.cond { color: var(--ink-3); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+
+/* ---------- the mode radio ----------
+   Real <input type="radio">s, visually hidden, with the label as the control.
+   A pair of buttons would have needed roving tabindex and arrow-key handling
+   reimplemented; radios give all of that for free and announce correctly. */
+.modes {
+  display: flex; align-items: center; gap: 0;
+  border: 1px solid var(--ink); margin-left: calc(var(--u));
+}
+.modes legend { font-size: 0; position: absolute; width: 1px; height: 1px; overflow: hidden; }
+.modes input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.modes label {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  padding: 5px 9px; min-height: 26px; cursor: pointer; color: var(--ink-2);
+  transition: background var(--fast) linear, color var(--fast) linear;
+}
+.modes label + input + label { border-left: 1px solid var(--rule); }
+.modes label:hover { background: var(--paper-2); }
+.modes input:checked + label { background: var(--ink); color: var(--paper); }
+.modes input:focus-visible + label { outline: 2px solid var(--red); outline-offset: -2px; }
+.modes label .gl { font-size: 11px; line-height: 1; }
+
+/* ---------- the board ---------- */
+#board { position: fixed; inset: var(--bar) 0 var(--dock) 0; z-index: 10; }
+body[data-mode='locked'] #board { display: flex; flex-direction: column; padding: 0 12px 4px; }
+
+/* ---------- LOOSE: sheets ----------
+   Positioned with left/top rather than a transform, because the mode switch
+   FLIPs every panel and needs `transform` free to carry the inverse. Six
+   absolutely positioned elements make the layout cost of dragging a non-issue. */
+/* Both modes share one size floor. They must: LOCKED can produce a column
+   narrower than a LOOSE sheet's minimum, and then unlocking snapped it wider
+   and broke the promise that the switch is lossless. */
+.sheet, .pane { min-width: var(--min-w); min-height: var(--min-h); }
+
+.sheet {
+  position: absolute; display: flex; flex-direction: column;
+  background: var(--paper); border: 1px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--offset);   /* mis-registration, not a drop shadow */
+  overflow: hidden;
+}
+.sheet[data-min='1'] { display: none; }
+.sheet.focused { box-shadow: 3px 3px 0 var(--offset), inset 0 2px 0 var(--red); }
+
+.folio {
+  flex: 0 0 auto; height: 26px; display: flex; align-items: center; gap: 6px;
+  padding: 0 var(--u) 0 calc(var(--u) * 2);
+  background: var(--paper-2); border-bottom: 1px solid var(--ink);
+  cursor: grab; user-select: none;
+}
+.folio:active { cursor: grabbing; }
+.folio h2, .phead h2 {
+  font-family: var(--sans); font-size: 9px; font-weight: 700;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.folio .sp, .phead .sp { flex: 1 1 auto; }
+.tally { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.folio button, .phead button {
+  width: 20px; height: 20px; display: grid; place-items: center;
+  background: transparent; border: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; line-height: 1; color: var(--ink-3);
+}
+.folio button:hover, .phead button:hover { background: var(--ink); color: var(--paper); }
+.folio button.x:hover, .phead button.x:hover { background: var(--red); color: var(--paper); }
+
+.rz { position: absolute; z-index: 3; }
+.rz.e { top: 6px; bottom: 6px; right: -3px; width: 8px; cursor: ew-resize; }
+.rz.s { left: 6px; right: 6px; bottom: -3px; height: 8px; cursor: ns-resize; }
+.rz.w { top: 6px; bottom: 6px; left: -3px; width: 8px; cursor: ew-resize; }
+.rz.n { left: 6px; right: 6px; top: -3px; height: 8px; cursor: ns-resize; }
+.rz.se { right: -3px; bottom: -3px; width: 14px; height: 14px; cursor: nwse-resize; }
+
+#ghost {
+  position: absolute; z-index: 5; pointer-events: none; opacity: 0;
+  border: 1px dashed var(--red); background: rgba(164, 41, 31, .06);
+  transition: opacity var(--fast) linear, left var(--fast) var(--ease), top var(--fast) var(--ease),
+              width var(--fast) var(--ease), height var(--fast) var(--ease);
+}
+
+/* ---------- LOCKED: decks, panes, gutters ---------- */
+.deck { display: flex; min-height: 0; min-width: 0; }
+.pane {
+  /* No min-width/min-height reset here — the shared floor above is the point.
+     Flex children default to min-width:auto, which the floor now supplies. */
+  display: flex; flex-direction: column;
+  overflow: hidden; background: var(--paper);
+}
+.pane.swaptarget { outline: 2px dashed var(--red); outline-offset: -3px; }
+.pane.lifted { opacity: .45; }
+.phead {
+  flex: 0 0 auto; display: flex; align-items: baseline; gap: 6px;
+  border-bottom: 2px solid var(--ink); padding: 5px 0 4px; margin-bottom: 7px;
+  cursor: grab; user-select: none;
+}
+.phead:active { cursor: grabbing; }
+
+.gut-v {
+  flex: 0 0 var(--gut); position: relative; cursor: col-resize;
+  display: flex; align-items: stretch; justify-content: center;
+}
+.gut-v::before { content: ''; width: 1px; background: var(--rule); }
+.gut-v:hover::before, .gut-v.active::before { background: var(--red); width: 2px; }
+.gut-h {
+  flex: 0 0 var(--gut); position: relative; cursor: row-resize;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.gut-h::before { content: ''; height: 1px; background: var(--rule); }
+.gut-h:hover::before, .gut-h.active::before { background: var(--red); height: 2px; }
+
+/* Body is shared by both modes. */
+.copy {
+  flex: 1 1 auto; overflow: auto; min-height: 0;
+  scrollbar-width: thin; scrollbar-color: var(--rule) transparent;
+}
+.sheet .copy { padding: calc(var(--u) * 2.5); }
+.pane .copy { padding-right: 2px; }
+.copy::-webkit-scrollbar { width: 9px; height: 9px; }
+.copy::-webkit-scrollbar-thumb { background: var(--rule); }
+
+/* ---------- composing stick (dock) ---------- */
+#stick {
+  position: fixed; left: 0; right: 0; bottom: 0; height: var(--dock); z-index: 60;
+  display: flex; align-items: center; gap: var(--u);
+  padding: 0 calc(var(--u) * 2);
+  background: var(--paper); border-top: 2px solid var(--ink); overflow-x: auto;
+}
+.slug {
+  display: flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 8px;
+  background: transparent; border: 1px solid var(--rule); border-radius: 0;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-3); cursor: pointer; white-space: nowrap;
+}
+.slug:hover { color: var(--ink); border-color: var(--ink); }
+.slug[data-open='1'] { color: var(--ink); border-color: var(--ink); background: var(--paper-2); }
+.slug .mark { width: 6px; height: 6px; background: var(--rule); }
+.slug[data-open='1'] .mark { background: var(--red); }
+.note { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+/* ---------- panel typography (shared) ---------- */
+.hd {
+  font-family: var(--sans); font-size: 9px; font-weight: 700;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--ink-3);
+  border-bottom: 1px solid var(--rule); padding-bottom: 3px; margin-bottom: 6px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 6px;
+}
+.hd .tally { font-weight: 400; }
+
+table.fig { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.fig th { text-align: left; font-weight: 400; color: var(--ink-2); padding: 3px 0; }
+table.fig td { text-align: right; padding: 3px 0; font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; }
+table.fig tr { border-bottom: 1px dotted var(--rule); }
+table.fig tr:last-child { border-bottom: 0; }
+table.fig td.warn { color: var(--red); }
+
+.galley { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.gcol { display: flex; flex-direction: column; min-width: 0; }
+.gdrop { display: flex; flex-direction: column; gap: 4px; min-height: 36px; padding: 2px 0; flex: 1 1 auto; }
+.gdrop.over { background: rgba(164, 41, 31, .07); outline: 1px dashed var(--red); }
+
+.cut {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: 0; border-top: 1px solid var(--rule);
+  padding: 5px 3px 6px; cursor: grab; color: var(--ink);
+}
+.cut:first-child { border-top: 0; }
+.cut:hover { background: var(--paper-2); }
+.cut.sel { background: var(--paper-2); border-left: 2px solid var(--red); padding-left: 5px; }
+.cut.overdue { border-left: 2px solid var(--red); padding-left: 5px; }
+.cut.dragging { opacity: .35; }
+.cut .t { display: block; font-size: 13px; line-height: 1.24; font-weight: 600; }
+.cut.done .t { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+.cut .d { display: block; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+.cut .d .od { color: var(--red); font-weight: 700; }
+
+.fld { margin-bottom: 8px; }
+.fld label { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 2px; }
+.fld input, .fld select, .fld textarea {
+  width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--ink);
+  border-radius: 0; padding: 4px 0; min-height: 30px; font-family: var(--serif); font-size: 13px;
+}
+.fld textarea { resize: vertical; min-height: 48px; }
+.fld select { font-family: var(--mono); font-size: 11px; }
+.fld input:focus, .fld select:focus, .fld textarea:focus { outline: none; border-bottom-color: var(--red); }
+.parse { font-family: var(--mono); font-size: 10px; color: var(--ink-3); border-top: 1px dotted var(--rule); padding-top: 5px; margin-top: 3px; min-height: 2.6em; }
+.parse b { color: var(--ink); }
+
+.tomb { padding: 5px 0; border-bottom: 1px dotted var(--rule); }
+.tomb:last-child { border-bottom: 0; }
+.tomb h4 { font-size: 12.5px; font-style: italic; font-weight: 600; }
+.tomb p { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); margin-top: 2px; }
+.tomb .acts { margin-top: 4px; display: flex; gap: 4px; }
+.tomb .chip { font-size: 9px; padding: 3px 5px; min-height: 24px; }
+
+svg.plot { width: 100%; height: auto; display: block; overflow: visible; }
+svg.plot text { font-family: var(--mono); font-size: 7px; fill: var(--ink-3); }
+svg.plot text.lbl { fill: var(--ink); font-weight: 700; }
+
+/* ---------- narrow: both modes become one scrolling page ---------- */
+@media (max-width: 900px) {
+  html, body { overflow: auto; height: auto; }
+  #board { position: static; inset: auto; display: block !important; padding: 8px 10px 12px; }
+  .sheet {
+    position: static !important; width: auto !important; height: auto !important;
+    left: auto !important; top: auto !important; margin-bottom: 12px; min-height: 200px;
+  }
+  .pane { min-height: 210px; margin-bottom: 14px; }
+  .deck { display: block; }
+  .gut-v, .gut-h, .rz, .folio button.mx { display: none; }
+  .folio, .phead { cursor: default; }
+  .galley { grid-template-columns: 1fr; }
+  #head { position: sticky; }
+  #stick { position: sticky; }
+  #head .rail { display: none; }
+}
+
+@media print {
+  #table, #grain, #head, #stick, .rz, .folio button, .phead button, .gut-v, .gut-h { display: none !important; }
+  html, body { overflow: visible; height: auto; background: #fff; }
+  #board { position: static; inset: auto; display: block; }
+  .deck { display: block; }
+  .sheet, .pane {
+    position: static !important; width: auto !important; height: auto !important;
+    left: auto !important; top: auto !important;
+    box-shadow: none; break-inside: avoid; margin-bottom: 12pt;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+.lab-back { color: var(--ink-3); text-decoration: none; font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
+.lab-back:hover { color: var(--ink); }
+</style>
+</head>
+<body data-mode="loose">
+
+<div id="table"></div>
+<svg id="grain" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <filter id="gr"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+  <rect width="100%" height="100%" filter="url(#gr)"/>
+</svg>
+
+<div id="head">
+  <span class="flag">Composing Room</span>
+
+  <fieldset class="modes" id="modes">
+    <legend>Layout mode</legend>
+    <input type="radio" name="mode" id="m-loose" value="loose" checked>
+    <label for="m-loose"><span class="gl" aria-hidden="true">▤</span> Loose</label>
+    <input type="radio" name="mode" id="m-locked" value="locked">
+    <label for="m-locked"><span class="gl" aria-hidden="true">▦</span> Locked</label>
+  </fieldset>
+
+  <label class="sr-only" for="projSel">Section</label>
+  <select id="projSel"></select>
+
+  <span class="rail" id="rail" role="group" aria-label="Saved arrangements"></span>
+  <button class="chip" id="saveArr" type="button">＋ Save</button>
+
+  <span class="sp"></span>
+  <span class="cond" id="cond">—</span>
+  <button class="chip" id="dusk" type="button" aria-pressed="false">Dusk</button>
+  <a class="lab-back" href="./index.html">Lab</a>
+</div>
+
+<div id="board"><div id="ghost" aria-hidden="true"></div></div>
+
+<div id="stick" role="toolbar" aria-label="Set a panel"></div>
+
+<p class="sr-only" role="status" aria-live="polite" id="live"></p>
+
+<script src="_kernel.js"></script>
+<script>
+(function () {
+'use strict';
+
+var $  = function (s, r) { return (r || document).querySelector(s); };
+var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+var board = $('#board'), ghost = $('#ghost'), live = $('#live');
+var REDUCED = PT.reducedMotion();
+// Read the floor from CSS so the two never drift apart.
+var CS = getComputedStyle(document.documentElement);
+var MIN_W = parseInt(CS.getPropertyValue('--min-w'), 10) || 210;
+var MIN_H = parseInt(CS.getPropertyValue('--min-h'), 10) || 130;
+var KEY = 'pt-composingroom';
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+function say(m) { live.textContent = m; }
+function narrow() { return window.innerWidth <= 900; }
+
+var P = {
+  galley:   { title: 'Galley',    render: rGalley },
+  schedule: { title: 'Schedule',  render: rSchedule },
+  ledger:   { title: 'Ledger',    render: rLedger },
+  copydesk: { title: 'Copy Desk', render: rCopyDesk },
+  wire:     { title: 'Wire',      render: rWire },
+  morgue:   { title: 'Morgue',    render: rMorgue },
+};
+
+/* One state object across both modes. `open` is authoritative — `wins` and
+   `layout` are just the two ways of arranging whatever is open. */
+var S = {
+  mode: 'loose',
+  project: null,
+  selected: null,
+  open: ['ledger', 'galley', 'wire', 'morgue'],
+  wins: {},        // LOOSE geometry, per panel
+  layout: null,    // LOCKED decks
+  custom: { loose: {}, locked: {} },
+};
+var zTop = 20;
+
+/* Presets. LOOSE geometry is fractions of the board, resolved at apply time —
+   fixed pixels only ever fill one screen size. */
+var PRESETS = {
+  loose: {
+    morning: { name: 'Morning', open: ['ledger', 'galley', 'wire', 'morgue'],
+      geo: { ledger: [0, 0, .25, .53], galley: [.255, 0, .745, .53],
+             wire: [0, .54, .49, .46], morgue: [.495, .54, .505, .46] } },
+    copy: { name: 'Copy Desk', open: ['galley', 'copydesk'],
+      geo: { galley: [0, 0, .70, 1], copydesk: [.705, 0, .295, 1] } },
+    press: { name: 'Press Check', open: ['schedule', 'ledger', 'morgue'],
+      geo: { schedule: [0, 0, 1, .42], ledger: [0, .43, .49, .57], morgue: [.495, .43, .505, .57] } },
+  },
+  locked: {
+    front: { name: 'Front Page', decks: [
+      { h: 2.1, panes: [{ id: 'galley', w: 2.4 }, { id: 'ledger', w: 1 }] },
+      { h: 1,   panes: [{ id: 'wire', w: 1 }, { id: 'morgue', w: 1.1 }] } ] },
+    copy: { name: 'Copy Desk', decks: [
+      { h: 1, panes: [{ id: 'galley', w: 2.6 }, { id: 'copydesk', w: 1 }] } ] },
+    press: { name: 'Press Check', decks: [
+      { h: 1.3, panes: [{ id: 'schedule', w: 1 }] },
+      { h: 1,   panes: [{ id: 'ledger', w: 1 }, { id: 'morgue', w: 1 }] } ] },
+  },
+};
+
+function boardRect() { return board.getBoundingClientRect(); }
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+/* ==========================================================================
+   RENDER — one entry point, dispatched on mode
+   ========================================================================== */
+function renderBoard() {
+  // Keep the ghost; it belongs to the board, not to any panel.
+  $$('#board > *').forEach(function (el) { if (el !== ghost) el.remove(); });
+  if (S.mode === 'loose') renderLoose(); else renderLocked();
+  paintAll();
+  syncStick();
+}
+
+/* --- LOOSE --------------------------------------------------------------- */
+function renderLoose() {
+  S.open.forEach(function (id) {
+    if (!S.wins[id]) S.wins[id] = defaultGeo(id);
+    board.appendChild(buildSheet(id));
+    applyGeo(id);
+  });
+}
+
+function defaultGeo(id) {
+  var R = boardRect(), i = S.open.indexOf(id);
+  return { x: 20 + i * 26, y: 16 + i * 22, w: Math.min(560, R.width - 60), h: Math.min(360, R.height - 60), z: ++zTop, min: false };
+}
+
+function buildSheet(id) {
+  var d = P[id];
+  var e = document.createElement('section');
+  e.className = 'sheet';
+  e.dataset.pane = id;
+  e.tabIndex = -1;
+  e.setAttribute('role', 'region');
+  e.setAttribute('aria-label', d.title + ' sheet');
+  e.innerHTML =
+    '<header class="folio"><h2>' + esc(d.title) + '</h2><span class="tally" data-tally></span>' +
+      '<span class="sp"></span>' +
+      '<button type="button" class="mn" aria-label="Set aside ' + esc(d.title) + '">–</button>' +
+      '<button type="button" class="mx" aria-label="Full board ' + esc(d.title) + '">□</button>' +
+      '<button type="button" class="x" aria-label="Lift out ' + esc(d.title) + '">✕</button>' +
+    '</header><div class="copy" data-body></div>' +
+    '<span class="rz n"></span><span class="rz s"></span><span class="rz e"></span>' +
+    '<span class="rz w"></span><span class="rz se"></span>';
+  wireSheet(id, e);
+  return e;
+}
+
+function applyGeo(id) {
+  var w = S.wins[id], e = paneEl(id);
+  if (!w || !e || narrow()) return;
+  e.style.left = Math.round(w.x) + 'px';
+  e.style.top = Math.round(w.y) + 'px';
+  e.style.width = Math.round(w.w) + 'px';
+  e.style.height = Math.round(w.h) + 'px';
+  e.style.zIndex = w.z;
+  e.dataset.min = w.min ? '1' : '0';
+}
+
+function clampGeo(w) {
+  var R = boardRect();
+  w.w = PT.clamp(w.w, MIN_W, R.width);
+  w.h = PT.clamp(w.h, MIN_H, R.height);
+  w.x = PT.clamp(w.x, -(w.w - 90), R.width - 90);
+  w.y = PT.clamp(w.y, 0, R.height - 26);
+}
+
+function focusSheet(id) {
+  var w = S.wins[id]; if (!w) return;
+  w.z = ++zTop; applyGeo(id);
+  $$('.sheet').forEach(function (x) { x.classList.remove('focused'); });
+  var e = paneEl(id); if (e) e.classList.add('focused');
+}
+
+function wireSheet(id, e) {
+  var folio = $('.folio', e);
+  e.addEventListener('pointerdown', function () { focusSheet(id); }, true);
+
+  $('.x', e).addEventListener('click', function (ev) { ev.stopPropagation(); lift(id); });
+  $('.mn', e).addEventListener('click', function (ev) {
+    ev.stopPropagation(); S.wins[id].min = true; applyGeo(id); syncStick(); save();
+    say(P[id].title + ' set aside');
+  });
+  $('.mx', e).addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    var w = S.wins[id], R = boardRect();
+    if (w._r) { w.x = w._r[0]; w.y = w._r[1]; w.w = w._r[2]; w.h = w._r[3]; w._r = null; }
+    else { w._r = [w.x, w.y, w.w, w.h]; w.x = 0; w.y = 0; w.w = R.width; w.h = R.height; }
+    applyGeo(id); save();
+  });
+
+  var drag = null;
+  folio.addEventListener('pointerdown', function (ev) {
+    if (narrow() || ev.target.closest('button')) return;
+    var w = S.wins[id];
+    drag = { px: ev.clientX, py: ev.clientY, ox: w.x, oy: w.y, snap: null };
+    folio.setPointerCapture(ev.pointerId); ev.preventDefault();
+  });
+  folio.addEventListener('pointermove', function (ev) {
+    if (!drag) return;
+    var w = S.wins[id], R = boardRect();
+    w.x = drag.ox + (ev.clientX - drag.px);
+    w.y = drag.oy + (ev.clientY - drag.py);
+    clampGeo(w); applyGeo(id);
+
+    var lx = ev.clientX - R.left, ly = ev.clientY - R.top, T = 28, s = null;
+    if (ly < T) s = [0, 0, R.width, R.height];
+    else if (lx < T) s = [0, 0, R.width / 2, R.height];
+    else if (lx > R.width - T) s = [R.width / 2, 0, R.width / 2, R.height];
+    drag.snap = s;
+    if (s) {
+      ghost.style.opacity = '1'; ghost.style.left = s[0] + 'px'; ghost.style.top = s[1] + 'px';
+      ghost.style.width = s[2] + 'px'; ghost.style.height = s[3] + 'px';
+    } else ghost.style.opacity = '0';
+  });
+  function endDrag(ev) {
+    if (!drag) return;
+    if (drag.snap) {
+      var w = S.wins[id];
+      w.x = drag.snap[0]; w.y = drag.snap[1]; w.w = drag.snap[2]; w.h = drag.snap[3];
+      applyGeo(id);
+    }
+    ghost.style.opacity = '0'; drag = null; save();
+    if (ev && ev.pointerId != null) { try { folio.releasePointerCapture(ev.pointerId); } catch (x) {} }
+  }
+  folio.addEventListener('pointerup', endDrag);
+  folio.addEventListener('pointercancel', endDrag);
+
+  $$('.rz', e).forEach(function (h) {
+    var dir = h.className.replace('rz ', '').trim(), rs = null;
+    h.addEventListener('pointerdown', function (ev) {
+      if (narrow()) return;
+      var w = S.wins[id];
+      rs = { px: ev.clientX, py: ev.clientY, ox: w.x, oy: w.y, ow: w.w, oh: w.h };
+      h.setPointerCapture(ev.pointerId); ev.preventDefault(); ev.stopPropagation();
+    });
+    h.addEventListener('pointermove', function (ev) {
+      if (!rs) return;
+      var w = S.wins[id], dx = ev.clientX - rs.px, dy = ev.clientY - rs.py;
+      if (dir.indexOf('e') >= 0) w.w = rs.ow + dx;
+      if (dir.indexOf('s') >= 0) w.h = rs.oh + dy;
+      if (dir.indexOf('w') >= 0) { w.w = rs.ow - dx; w.x = rs.ox + dx; }
+      if (dir.indexOf('n') >= 0) { w.h = rs.oh - dy; w.y = rs.oy + dy; }
+      clampGeo(w); applyGeo(id);
+    });
+    function endRz(ev) {
+      if (!rs) return;
+      rs = null; save(); paint(id);
+      if (ev && ev.pointerId != null) { try { h.releasePointerCapture(ev.pointerId); } catch (x) {} }
+    }
+    h.addEventListener('pointerup', endRz);
+    h.addEventListener('pointercancel', endRz);
+  });
+
+  e.addEventListener('keydown', function (ev) {
+    if (!ev.altKey || narrow()) return;
+    var w = S.wins[id], R = boardRect(), did = true;
+    if (ev.key === 'ArrowLeft')       { w.x = 0; w.y = 0; w.w = R.width / 2; w.h = R.height; }
+    else if (ev.key === 'ArrowRight') { w.x = R.width / 2; w.y = 0; w.w = R.width / 2; w.h = R.height; }
+    else if (ev.key === 'ArrowUp')    { w.x = 0; w.y = 0; w.w = R.width; w.h = R.height; }
+    else if (ev.key === 'ArrowDown')  { w.min = true; syncStick(); }
+    else did = false;
+    if (did) { ev.preventDefault(); applyGeo(id); save(); say(P[id].title + ' squared up'); }
+  });
+}
+
+/* --- LOCKED -------------------------------------------------------------- */
+function renderLocked() {
+  if (!S.layout) S.layout = deriveLayout();
+  S.layout.decks.forEach(function (deck, di) {
+    if (di > 0 && !narrow()) board.appendChild(gutH(di));
+    var dEl = document.createElement('div');
+    dEl.className = 'deck';
+    dEl.style.flex = deck.h + ' 1 0';
+    deck.panes.forEach(function (pn, pi) {
+      if (pi > 0 && !narrow()) dEl.appendChild(gutV(di, pi));
+      dEl.appendChild(buildPane(pn));
+    });
+    board.appendChild(dEl);
+  });
+}
+
+function buildPane(pn) {
+  var d = P[pn.id];
+  var el = document.createElement('section');
+  el.className = 'pane';
+  el.dataset.pane = pn.id;
+  el.style.flex = pn.w + ' 1 0';
+  el.setAttribute('role', 'region');
+  el.setAttribute('aria-label', d.title + ' pane');
+  el.innerHTML =
+    '<div class="phead"><h2>' + esc(d.title) + '</h2><span class="tally" data-tally></span>' +
+      '<span class="sp"></span>' +
+      '<button type="button" class="x" aria-label="Lift ' + esc(d.title) + ' out of the forme">✕</button>' +
+    '</div><div class="copy" data-body></div>';
+  $('.x', el).addEventListener('click', function (e) { e.stopPropagation(); lift(pn.id); });
+  wireSwap(el, pn.id);
+  return el;
+}
+
+function findPane(id) {
+  if (!S.layout) return null;
+  for (var i = 0; i < S.layout.decks.length; i++)
+    for (var j = 0; j < S.layout.decks[i].panes.length; j++)
+      if (S.layout.decks[i].panes[j].id === id) return { d: i, p: j };
+  return null;
+}
+
+function wireSwap(el, id) {
+  var head = $('.phead', el), drag = null;
+  head.addEventListener('pointerdown', function (e) {
+    if (narrow() || e.target.closest('button')) return;
+    drag = { moved: false };
+    head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (!drag.moved) { drag.moved = true; el.classList.add('lifted'); }
+    $$('.pane').forEach(function (p) { p.classList.remove('swaptarget'); });
+    var over = paneUnder(e.clientX, e.clientY);
+    if (over && over !== el) over.classList.add('swaptarget');
+  });
+  function end(e) {
+    if (!drag) return;
+    var moved = drag.moved; drag = null;
+    el.classList.remove('lifted');
+    $$('.pane').forEach(function (p) { p.classList.remove('swaptarget'); });
+    if (e && e.pointerId != null) { try { head.releasePointerCapture(e.pointerId); } catch (x) {} }
+    if (!moved || !e) return;
+    var over = paneUnder(e.clientX, e.clientY);
+    if (over && over !== el) swap(id, over.dataset.pane);
+  }
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+
+  head.tabIndex = 0;
+  head.addEventListener('keydown', function (e) {
+    if (!e.altKey) return;
+    var pos = findPane(id); if (!pos) return;
+    var deck = S.layout.decks[pos.d], target = null;
+    if (e.key === 'ArrowRight' && deck.panes[pos.p + 1]) target = deck.panes[pos.p + 1].id;
+    else if (e.key === 'ArrowLeft' && deck.panes[pos.p - 1]) target = deck.panes[pos.p - 1].id;
+    else if (e.key === 'ArrowDown' && S.layout.decks[pos.d + 1]) target = S.layout.decks[pos.d + 1].panes[0].id;
+    else if (e.key === 'ArrowUp' && S.layout.decks[pos.d - 1]) target = S.layout.decks[pos.d - 1].panes[0].id;
+    if (!target) return;
+    e.preventDefault();
+    swap(id, target);
+    var moved = $('[data-pane="' + id + '"] .phead');
+    if (moved) moved.focus();
+  });
+}
+
+function paneUnder(x, y) {
+  var hit = null;
+  $$('.pane').forEach(function (p) {
+    var r = p.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) hit = p;
+  });
+  return hit;
+}
+
+function swap(a, b) {
+  var pa = findPane(a), pb = findPane(b);
+  if (!pa || !pb) return;
+  var A = S.layout.decks[pa.d].panes[pa.p], B = S.layout.decks[pb.d].panes[pb.p];
+  var t = A.id; A.id = B.id; B.id = t;      // swap contents, keep the proportions
+  renderBoard(); save();
+  say(P[a].title + ' swapped with ' + P[b].title);
+}
+
+function gutV(di, pi) {
+  var g = document.createElement('div');
+  g.className = 'gut-v'; g.tabIndex = 0;
+  g.setAttribute('role', 'separator');
+  g.setAttribute('aria-orientation', 'vertical');
+  g.setAttribute('aria-label', 'Column width');
+  var st = null;
+  g.addEventListener('pointerdown', function (e) {
+    var deck = S.layout.decks[di];
+    st = { x: e.clientX, a: deck.panes[pi - 1].w, b: deck.panes[pi].w, total: g.parentNode.getBoundingClientRect().width };
+    g.classList.add('active'); g.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  g.addEventListener('pointermove', function (e) {
+    if (!st) return;
+    var deck = S.layout.decks[di], sum = st.a + st.b;
+    var frac = (e.clientX - st.x) / Math.max(1, st.total) * sum;
+    var a = PT.clamp(st.a + frac, sum * .18, sum * .82);
+    deck.panes[pi - 1].w = a; deck.panes[pi].w = sum - a;
+    var panes = $$('.pane', g.parentNode);
+    panes[pi - 1].style.flex = a + ' 1 0';
+    panes[pi].style.flex = (sum - a) + ' 1 0';
+  });
+  function end(e) {
+    if (!st) return;
+    st = null; g.classList.remove('active'); save();
+    if (e && e.pointerId != null) { try { g.releasePointerCapture(e.pointerId); } catch (x) {} }
+  }
+  g.addEventListener('pointerup', end);
+  g.addEventListener('pointercancel', end);
+  g.addEventListener('keydown', function (e) {
+    var step = e.key === 'ArrowLeft' ? -.12 : e.key === 'ArrowRight' ? .12 : 0;
+    if (!step) return;
+    e.preventDefault();
+    var deck = S.layout.decks[di], sum = deck.panes[pi - 1].w + deck.panes[pi].w;
+    var a = PT.clamp(deck.panes[pi - 1].w + step, sum * .18, sum * .82);
+    deck.panes[pi - 1].w = a; deck.panes[pi].w = sum - a;
+    renderBoard(); save();
+  });
+  return g;
+}
+
+function gutH(di) {
+  var g = document.createElement('div');
+  g.className = 'gut-h'; g.tabIndex = 0;
+  g.setAttribute('role', 'separator');
+  g.setAttribute('aria-orientation', 'horizontal');
+  g.setAttribute('aria-label', 'Deck height');
+  var st = null;
+  g.addEventListener('pointerdown', function (e) {
+    st = { y: e.clientY, a: S.layout.decks[di - 1].h, b: S.layout.decks[di].h, total: boardRect().height };
+    g.classList.add('active'); g.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  g.addEventListener('pointermove', function (e) {
+    if (!st) return;
+    var sum = st.a + st.b;
+    var frac = (e.clientY - st.y) / Math.max(1, st.total) * sum;
+    var a = PT.clamp(st.a + frac, sum * .18, sum * .82);
+    S.layout.decks[di - 1].h = a; S.layout.decks[di].h = sum - a;
+    var decks = $$('.deck');
+    decks[di - 1].style.flex = a + ' 1 0';
+    decks[di].style.flex = (sum - a) + ' 1 0';
+  });
+  function end(e) {
+    if (!st) return;
+    st = null; g.classList.remove('active'); save();
+    if (e && e.pointerId != null) { try { g.releasePointerCapture(e.pointerId); } catch (x) {} }
+  }
+  g.addEventListener('pointerup', end);
+  g.addEventListener('pointercancel', end);
+  g.addEventListener('keydown', function (e) {
+    var step = e.key === 'ArrowUp' ? -.12 : e.key === 'ArrowDown' ? .12 : 0;
+    if (!step) return;
+    e.preventDefault();
+    var sum = S.layout.decks[di - 1].h + S.layout.decks[di].h;
+    var a = PT.clamp(S.layout.decks[di - 1].h + step, sum * .18, sum * .82);
+    S.layout.decks[di - 1].h = a; S.layout.decks[di].h = sum - a;
+    renderBoard(); save();
+  });
+  return g;
+}
+
+/* ==========================================================================
+   MODE SWITCH — the point of this variant
+   ========================================================================== */
+
+/** LOOSE -> LOCKED. Read where the sheets actually are and square them up:
+    cluster into decks by vertical overlap, order left to right, and carry the
+    real widths and heights through as the flex ratios. What you arranged by
+    hand is what gets locked. */
+function deriveLayout() {
+  var items = S.open
+    .filter(function (id) { return !(S.wins[id] && S.wins[id].min); })
+    .map(function (id) {
+      var w = S.wins[id] || defaultGeo(id);
+      return { id: id, x: w.x, y: w.y, w: w.w, h: w.h };
+    })
+    .sort(function (a, b) { return a.y - b.y; });
+
+  if (!items.length) return { decks: [{ h: 1, panes: [{ id: S.open[0] || 'galley', w: 1 }] }] };
+
+  var decks = [];
+  items.forEach(function (it) {
+    var placed = false;
+    for (var i = 0; i < decks.length; i++) {
+      var d = decks[i];
+      // Same deck if the vertical spans overlap by more than half the shorter one.
+      var top = Math.max(d.top, it.y), bot = Math.min(d.bot, it.y + it.h);
+      var overlap = bot - top;
+      if (overlap > Math.min(d.bot - d.top, it.h) * 0.5 && d.items.length < 4) {
+        d.items.push(it);
+        d.top = Math.min(d.top, it.y); d.bot = Math.max(d.bot, it.y + it.h);
+        placed = true; break;
+      }
+    }
+    if (!placed) decks.push({ top: it.y, bot: it.y + it.h, items: [it] });
+  });
+
+  return {
+    decks: decks.map(function (d) {
+      d.items.sort(function (a, b) { return a.x - b.x; });
+      return {
+        h: Math.max(0.2, (d.bot - d.top) / 100),
+        panes: d.items.map(function (it) { return { id: it.id, w: Math.max(0.2, it.w / 100) }; }),
+      };
+    }),
+  };
+}
+
+/** LOCKED -> LOOSE. Freeze the panes exactly where they sit, so unlocking is
+    visually a no-op and you carry on from the page you were reading. */
+function freezeToWins() {
+  var R = boardRect();
+  $$('.pane').forEach(function (el) {
+    var r = el.getBoundingClientRect();
+    S.wins[el.dataset.pane] = {
+      x: r.left - R.left, y: r.top - R.top, w: r.width, h: r.height,
+      z: ++zTop, min: false,
+    };
+  });
+}
+
+function setMode(next, quiet) {
+  if (next === S.mode) return;
+
+  var before = {};
+  $$('[data-pane]').forEach(function (el) { before[el.dataset.pane] = el.getBoundingClientRect(); });
+
+  if (next === 'locked') S.layout = deriveLayout();
+  else freezeToWins();
+
+  S.mode = next;
+  document.body.dataset.mode = next;
+  var radio = $('#m-' + next); if (radio) radio.checked = true;
+
+  renderBoard();
+  rail();
+  save();
+
+  // FLIP. LOCKED -> LOOSE is geometrically identical by construction, so this
+  // costs nothing there; LOOSE -> LOCKED is where the squaring-up reads.
+  if (!REDUCED && !narrow()) {
+    $$('[data-pane]').forEach(function (el) {
+      var b = before[el.dataset.pane];
+      if (!b || !b.width) return;
+      var a = el.getBoundingClientRect();
+      var dx = b.left - a.left, dy = b.top - a.top;
+      var sx = b.width / Math.max(1, a.width), sy = b.height / Math.max(1, a.height);
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < .01 && Math.abs(sy - 1) < .01) return;
+      el.style.transformOrigin = '0 0';
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + sx + ',' + sy + ')';
+      requestAnimationFrame(function () {
+        el.style.transition = 'transform 260ms ' + 'cubic-bezier(.2,.8,.3,1)';
+        el.style.transform = '';
+        setTimeout(function () { el.style.transition = ''; el.style.transformOrigin = ''; }, 300);
+      });
+    });
+  }
+
+  if (!quiet) say(next === 'locked' ? 'Locked up — panes tiled, nothing overlaps' : 'Loose — sheets float and can overlap');
+}
+
+$$('#modes input').forEach(function (r) {
+  r.addEventListener('change', function () { if (r.checked) setMode(r.value); });
+});
+
+/* ==========================================================================
+   OPEN / LIFT
+   ========================================================================== */
+function paneEl(id) { return $('[data-pane="' + id + '"]'); }
+
+function setIn(id) {
+  if (S.open.indexOf(id) >= 0) {
+    if (S.wins[id]) S.wins[id].min = false;
+  } else {
+    S.open.push(id);
+    if (S.mode === 'locked' && S.layout) {
+      var best = -1, n = 99;
+      S.layout.decks.forEach(function (d, i) { if (d.panes.length < n) { n = d.panes.length; best = i; } });
+      if (n >= 3 || best < 0) S.layout.decks.push({ h: 1, panes: [{ id: id, w: 1 }] });
+      else S.layout.decks[best].panes.push({ id: id, w: 1 });
+    } else {
+      S.wins[id] = defaultGeo(id);
+    }
+  }
+  renderBoard(); save();
+  if (S.mode === 'loose') focusSheet(id);
+  say(P[id].title + ' set');
+}
+
+function lift(id) {
+  S.open = S.open.filter(function (x) { return x !== id; });
+  if (S.layout) {
+    var pos = findPane(id);
+    if (pos) {
+      S.layout.decks[pos.d].panes.splice(pos.p, 1);
+      if (!S.layout.decks[pos.d].panes.length) S.layout.decks.splice(pos.d, 1);
+    }
+  }
+  // A locked page with nothing on it is not a page.
+  if (S.mode === 'locked' && (!S.layout || !S.layout.decks.length)) {
+    var fallback = Object.keys(P)[0];
+    S.open = [fallback];
+    S.layout = { decks: [{ h: 1, panes: [{ id: fallback, w: 1 }] }] };
+  }
+  renderBoard(); save();
+  say(P[id].title + ' lifted out');
+}
+
+/* ==========================================================================
+   PANEL BODIES
+   ========================================================================== */
+function bodyOf(id) { var p = paneEl(id); return p ? $('[data-body]', p) : null; }
+function tallyOf(id) { var p = paneEl(id); return p ? $('[data-tally]', p) : null; }
+function paint(id) { var b = bodyOf(id); if (b && P[id]) P[id].render(b); }
+function paintAll() { S.open.forEach(paint); }
+
+var COLS = [{ id: 'todo', name: 'Standing' }, { id: 'doing', name: 'On the stone' }, { id: 'done', name: 'Printed' }];
+
+function rGalley(c) {
+  var ts = PT.tasks({ project: S.project }), now = Date.now();
+  var t = tallyOf('galley'); if (t) t.textContent = ts.length;
+
+  c.innerHTML = '<div class="galley">' + COLS.map(function (col) {
+    var items = ts.filter(function (x) { return x.status === col.id; });
+    return '<div class="gcol"><div class="hd">' + esc(col.name) + '<span class="tally">' + items.length + '</span></div>' +
+      '<div class="gdrop" data-drop="' + col.id + '" role="list" aria-label="' + esc(col.name) + '">' +
+      items.map(function (x) {
+        var od = x.due && x.due < now && x.status !== 'done';
+        return '<button type="button" role="listitem" draggable="true" data-task="' + x.id + '" ' +
+          'class="cut' + (S.selected === x.id ? ' sel' : '') + (od ? ' overdue' : '') + (x.status === 'done' ? ' done' : '') + '">' +
+          '<span class="t">' + esc(x.title) + '</span><span class="d">' + esc(x.priority) + ' · ' + esc(x.estimate) + 'h' +
+          (x.due ? ' · <span class="' + (od ? 'od' : '') + '">' + esc(od ? 'OVERDUE ' + PT.relDay(x.due) : PT.relDay(x.due)) + '</span>' : '') +
+          '</span></button>';
+      }).join('') + '</div></div>';
+  }).join('') + '</div>';
+
+  $$('[data-task]', c).forEach(function (b) {
+    b.addEventListener('click', function () { sel(b.dataset.task); });
+    b.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/plain', b.dataset.task);
+      e.dataTransfer.effectAllowed = 'move';
+      b.classList.add('dragging'); sel(b.dataset.task);
+    });
+    b.addEventListener('dragend', function () { b.classList.remove('dragging'); });
+  });
+  $$('[data-drop]', c).forEach(function (z) {
+    z.addEventListener('dragover', function (e) { e.preventDefault(); z.classList.add('over'); });
+    z.addEventListener('dragleave', function () { z.classList.remove('over'); });
+    z.addEventListener('drop', function (e) {
+      e.preventDefault(); z.classList.remove('over');
+      var id = e.dataTransfer.getData('text/plain');
+      if (id) { PT.moveTask(id, z.dataset.drop); say('Moved'); }
+    });
+  });
+}
+
+function sel(id) { S.selected = id; paintAll(); var t = PT.task(id); if (t) say('Selected ' + t.title); }
+
+function rSchedule(c) {
+  var ts = PT.tasks({ project: S.project });
+  var tl = tallyOf('schedule'); if (tl) tl.textContent = ts.length;
+  if (!ts.length) { c.innerHTML = '<p class="note">Nothing scheduled.</p>'; return; }
+  var now = Date.now();
+  var t0 = Math.min.apply(null, ts.map(function (t) { return t.createdAt; }).concat([now - 3 * PT.DAY]));
+  var t1 = Math.max.apply(null, ts.map(function (t) { return t.due || t.doneAt || t.createdAt + 6 * PT.DAY; }).concat([now + 7 * PT.DAY]));
+  var span = Math.max(1, t1 - t0), W = 900, ROW = 18, H = ts.length * ROW + 22;
+  var x = function (v) { return ((v - t0) / span) * (W - 210) + 200; };
+
+  var grid = '', d = new Date(t0); d.setHours(0, 0, 0, 0);
+  while (d.getTime() < t1) {
+    var gx = x(d.getTime());
+    if (gx > 198) grid += '<line x1="' + gx.toFixed(1) + '" x2="' + gx.toFixed(1) + '" y1="13" y2="' + (H - 4) +
+      '" stroke="var(--rule)" stroke-width=".5"/><text x="' + gx.toFixed(1) + '" y="9">' + esc(PT.shortDate(d.getTime())) + '</text>';
+    d = new Date(d.getTime() + 7 * PT.DAY);
+  }
+  var bars = ts.map(function (t, i) {
+    var y = 19 + i * ROW, a = x(t.createdAt);
+    var b = x(t.due || t.doneAt || t.createdAt + (t.estimate || 2) * 3 * PT.DAY);
+    var od = t.due && t.due < now && t.status !== 'done';
+    var fill = t.status === 'done' ? 'var(--rule)' : od ? 'var(--red)' : 'var(--ink)';
+    var op = t.status === 'todo' ? .42 : 1;
+    var label = t.title.length > 32 ? t.title.slice(0, 31) + '…' : t.title;
+    return '<g class="grow" data-task="' + t.id + '" style="cursor:pointer">' +
+      '<rect x="0" y="' + (y - 7) + '" width="' + W + '" height="' + (ROW - 2) + '" fill="' +
+        (S.selected === t.id ? 'rgba(164,41,31,.09)' : 'transparent') + '"/>' +
+      '<text x="2" y="' + (y + 3) + '" fill="var(--ink-2)" font-size="9">' + esc(label) + '</text>' +
+      '<rect x="' + Math.min(a, b).toFixed(1) + '" y="' + (y - 3) + '" width="' +
+        Math.max(3, Math.abs(b - a)).toFixed(1) + '" height="6" fill="' + fill + '" opacity="' + op + '"/></g>';
+  }).join('');
+  var nx = x(now);
+  c.innerHTML = '<svg class="plot" viewBox="0 0 ' + W + ' ' + H + '" style="min-width:600px" role="img" ' +
+    'aria-label="Schedule of ' + ts.length + ' items">' + grid +
+    '<line x1="' + nx.toFixed(1) + '" x2="' + nx.toFixed(1) + '" y1="11" y2="' + (H - 4) + '" stroke="var(--red)" stroke-width="1"/>' +
+    '<text class="lbl" x="' + (nx + 3).toFixed(1) + '" y="9" fill="var(--red)">today</text>' + bars + '</svg>' +
+    '<p class="note" style="margin-top:5px">Solid = on the stone · faint = standing · red = past due · grey = printed</p>';
+  $$('.grow', c).forEach(function (g) { g.addEventListener('click', function () { sel(g.dataset.task); }); });
+}
+
+function rLedger(c) {
+  var s = PT.stats(S.project), m = PT.momentum(), f = PT.forecast(S.project);
+  var landing = f.done ? 'complete' : !isFinite(f.days) ? 'no measurable pace' : PT.shortDate(f.date.getTime());
+  var trend = m.trend > .15 ? 'rising' : m.trend < -.15 ? 'falling' : 'steady';
+  var row = function (k, v, w) { return '<tr><th scope="row">' + esc(k) + '</th><td class="' + (w ? 'warn' : '') + '">' + esc(v) + '</td></tr>'; };
+  var tl = tallyOf('ledger'); if (tl) tl.textContent = s.pct + '%';
+
+  var series = PT.timeline(30), plot = '';
+  if (series.length > 1) {
+    var W = 280, H = 70, PL = 20, PB = 11, PTp = 5;
+    var max = Math.max(1, Math.max.apply(null, series.map(function (d) { return d.total; })));
+    var xx = function (i) { return PL + (i / (series.length - 1)) * (W - PL - 4); };
+    var yy = function (v) { return PTp + (1 - v / max) * (H - PTp - PB); };
+    var open = series.map(function (d, i) { return (i ? 'L' : 'M') + xx(i).toFixed(1) + ' ' + yy(d.open).toFixed(1); }).join(' ');
+    var done = series.map(function (d, i) { return (i ? 'L' : 'M') + xx(i).toFixed(1) + ' ' + yy(d.done).toFixed(1); }).join(' ');
+    var last = series[series.length - 1];
+    plot = '<svg class="plot" viewBox="0 0 ' + W + ' ' + H + '" style="margin-top:8px" role="img" ' +
+      'aria-label="' + last.open + ' open and ' + last.done + ' printed over thirty days">' +
+      '<line x1="' + PL + '" x2="' + (W - 4) + '" y1="' + yy(0) + '" y2="' + yy(0) + '" stroke="var(--rule)" stroke-width=".5"/>' +
+      '<line x1="' + PL + '" x2="' + (W - 4) + '" y1="' + yy(max) + '" y2="' + yy(max) + '" stroke="var(--rule)" stroke-width=".5"/>' +
+      '<text x="' + (PL - 3) + '" y="' + (yy(max) + 2.5) + '" text-anchor="end">' + max + '</text>' +
+      '<text x="' + (PL - 3) + '" y="' + (yy(0) + 2.5) + '" text-anchor="end">0</text>' +
+      '<path d="' + open + '" fill="none" stroke="var(--red)" stroke-width="1.2"/>' +
+      '<path d="' + done + '" fill="none" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="3 2"/>' +
+      '<text class="lbl" x="' + (W - 5) + '" y="' + (yy(last.open) - 3) + '" text-anchor="end">open ' + last.open + '</text>' +
+      '<text class="lbl" x="' + (W - 5) + '" y="' + (yy(last.done) + 8) + '" text-anchor="end">printed ' + last.done + '</text></svg>' +
+      '<p class="note">Thirty days</p>';
+  }
+
+  c.innerHTML = '<div class="hd">By the numbers</div><table class="fig"><tbody>' +
+    row('Standing', s.todo) + row('On the stone', s.doing) + row('Printed', s.done + ' / ' + s.total) +
+    row('Past due', s.overdue, s.overdue > 0) + row('Hours out', s.hoursLeft + 'h') +
+    row('Complete', s.pct + '%') + row('Pace', m.perWeek + '/wk') + row('Trend', trend, m.trend < -.15) +
+    row('Goes to press', landing, !isFinite(f.days)) + '</tbody></table>' + plot +
+    '<p style="margin-top:9px"><button class="chip red" id="rst" type="button">Reset the archive</button></p>';
+
+  $('#rst', c).addEventListener('click', function () {
+    PT.reset(); S.project = PT.projects()[0] ? PT.projects()[0].id : null; S.selected = null;
+    projects(); say('Reset');
+  });
+}
+
+function rCopyDesk(c) {
+  var t = S.selected ? PT.task(S.selected) : null;
+  var tl = tallyOf('copydesk'); if (tl) tl.textContent = t ? '' : 'none selected';
+  if (!t) { c.innerHTML = '<p class="note">Select an item in the galley or schedule.</p>'; return; }
+  var opt = function (v, cur) { return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + v + '</option>'; };
+
+  c.innerHTML =
+    '<div class="fld"><label for="f-t">Headline</label><input id="f-t" value="' + esc(t.title) + '"></div>' +
+    '<div class="fld"><label for="f-n">Notes</label><textarea id="f-n" placeholder="Nothing marked up">' + esc(t.notes) + '</textarea></div>' +
+    '<div class="fld"><label for="f-s">Status</label><select id="f-s">' + ['todo','doing','done'].map(function (v) { return opt(v, t.status); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-p">Priority</label><select id="f-p">' + ['low','medium','high'].map(function (v) { return opt(v, t.priority); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-e">Energy</label><select id="f-e">' + ['deep','shallow','admin'].map(function (v) { return opt(v, t.energy); }).join('') + '</select></div>' +
+    '<div class="fld"><label for="f-h">Estimate (hours)</label><input id="f-h" type="number" min="0.5" step="0.5" value="' + esc(t.estimate) + '"></div>' +
+    '<div class="fld"><label for="f-d">Due</label><input id="f-d" type="date" value="' + (t.due ? new Date(t.due).toISOString().slice(0, 10) : '') + '"></div>' +
+    '<table class="fig"><tbody>' +
+      '<tr><th scope="row">Staleness</th><td class="' + (PT.staleness(t) > .4 ? 'warn' : '') + '">' + Math.round(PT.staleness(t) * 100) + '%</td></tr>' +
+      '<tr><th scope="row">Rank</th><td>' + PT.score(t) + '</td></tr>' +
+      '<tr><th scope="row">Filed</th><td>' + esc(PT.shortDate(t.createdAt)) + '</td></tr></tbody></table>' +
+    '<p style="margin-top:9px"><button class="chip red" id="f-x" type="button">Spike this item</button></p>';
+
+  var bind = function (s, prop, xf) {
+    $(s, c).addEventListener('change', function () {
+      var o = {}; o[prop] = xf ? xf(this.value) : this.value;
+      PT.patchTask(t.id, o); say('Updated ' + prop);
+    });
+  };
+  bind('#f-t', 'title'); bind('#f-n', 'notes'); bind('#f-p', 'priority'); bind('#f-e', 'energy');
+  bind('#f-h', 'estimate', function (v) { return parseFloat(v) || 1; });
+  bind('#f-d', 'due', function (v) { return v ? new Date(v + 'T17:00:00').getTime() : null; });
+  $('#f-s', c).addEventListener('change', function () { PT.moveTask(t.id, this.value); });
+  $('#f-x', c).addEventListener('click', function () { PT.removeTask(t.id); S.selected = null; say('Spiked'); });
+}
+
+function rWire(c) {
+  var n = PT.nextAction(S.project);
+  var tl = tallyOf('wire'); if (tl) tl.textContent = '';
+  c.innerHTML =
+    (n ? '<div class="hd">The lead</div><p style="font-size:14px;font-weight:600;line-height:1.25">' + esc(n.task.title) + '</p>' +
+         '<p class="note" style="margin:3px 0 8px">' + esc(n.why) + '</p>' +
+         '<p style="margin-bottom:10px"><button class="chip" id="w-n" type="button">' +
+         (n.task.status === 'doing' ? 'Send to press' : 'Put it on the stone') + '</button></p>' : '') +
+    '<div class="hd">File an item</div>' +
+    '<div class="fld"><label class="sr-only" for="w-i">File an item</label>' +
+      '<input id="w-i" placeholder="rewrite the composer !high @fri #ui ~4h /redesign" autocomplete="off"></div>' +
+    '<p class="parse" id="w-p">!high · @fri · #tag · ~4h · /project · *deep</p>' +
+    '<button class="chip" id="w-a" type="button">File it</button>';
+
+  var i = $('#w-i', c), p = $('#w-p', c);
+  function prev() {
+    var v = i.value.trim();
+    if (!v) { p.innerHTML = '!high · @fri · #tag · ~4h · /project · *deep'; return; }
+    var q = PT.parse(v), proj = PT.project(q.projectId || S.project);
+    p.innerHTML = 'Files <b>' + esc(q.title || '(no headline)') + '</b> · ' + esc(q.priority) + ' · ' +
+      esc(q.due ? PT.relDay(q.due) : 'no date') + ' · ' + esc(q.estimate) + 'h · ' + esc(q.energy) +
+      (q.tags.length ? ' · #' + q.tags.map(esc).join(' #') : '') + ' · <b>' + esc(proj ? proj.name : '?') + '</b>';
+  }
+  function go() {
+    var t = PT.quickAdd(i.value.trim(), S.project);
+    if (!t) { say('Nothing to file'); return; }
+    i.value = ''; prev(); sel(t.id); say('Filed ' + t.title);
+  }
+  i.addEventListener('input', prev);
+  i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  $('#w-a', c).addEventListener('click', go);
+  var nb = $('#w-n', c);
+  if (nb) nb.addEventListener('click', function () {
+    PT.moveTask(n.task.id, n.task.status === 'doing' ? 'done' : 'doing'); sel(n.task.id);
+  });
+}
+
+function rMorgue(c) {
+  var dead = PT.tasks({}).filter(function (t) { return t.status !== 'done' && PT.staleness(t) > .18; })
+    .sort(function (a, b) { return PT.staleness(b) - PT.staleness(a); }).slice(0, 8);
+  var tl = tallyOf('morgue'); if (tl) tl.textContent = dead.length;
+  c.innerHTML = dead.length
+    ? '<p class="note" style="margin-bottom:5px">Items untouched long enough to be presumed lost.</p>' +
+      dead.map(function (t) {
+        var pr = PT.project(t.projectId);
+        return '<div class="tomb"><h4>' + esc(t.title) + '</h4><p>' + esc(pr ? pr.name : '') + ' · untouched ' +
+          Math.floor((Date.now() - t.touchedAt) / PT.DAY) + ' days · ' + Math.round(PT.staleness(t) * 100) + '% gone</p>' +
+          '<div class="acts"><button class="chip" data-rev="' + t.id + '" type="button">Revive</button>' +
+          '<button class="chip red" data-let="' + t.id + '" type="button">Let go</button></div></div>';
+      }).join('')
+    : '<p class="note">Nothing has been left to rot.</p>';
+  $$('[data-rev]', c).forEach(function (b) {
+    b.addEventListener('click', function () { PT.patchTask(b.dataset.rev, { status: 'doing' }); say('Revived'); });
+  });
+  $$('[data-let]', c).forEach(function (b) {
+    b.addEventListener('click', function () { PT.removeTask(b.dataset.let); say('Let go'); });
+  });
+}
+
+/* ==========================================================================
+   ARRANGEMENTS — one rail, contents follow the mode
+   ========================================================================== */
+function presets() {
+  var o = {}, base = PRESETS[S.mode], custom = S.custom[S.mode] || {};
+  Object.keys(base).forEach(function (k) { o[k] = base[k]; });
+  Object.keys(custom).forEach(function (k) { o[k] = custom[k]; });
+  return o;
+}
+
+function resolveGeo(g) {
+  if (!g) return null;
+  if (g[2] > 1 || g[3] > 1) return g;      // already pixels (a saved arrangement)
+  var R = boardRect();
+  return [g[0] * R.width, g[1] * R.height, g[2] * R.width, g[3] * R.height];
+}
+
+function applyPreset(key) {
+  var pr = presets()[key];
+  if (!pr) return;
+  S.arrangement = key;
+
+  if (S.mode === 'loose') {
+    S.open = pr.open.slice();
+    S.open.forEach(function (id) {
+      var g = resolveGeo(pr.geo && pr.geo[id]);
+      S.wins[id] = g
+        ? { x: g[0], y: g[1], w: g[2], h: g[3], z: ++zTop, min: false }
+        : defaultGeo(id);
+    });
+  } else {
+    S.layout = clone({ decks: pr.decks });
+    S.open = [];
+    S.layout.decks.forEach(function (d) { d.panes.forEach(function (p) { S.open.push(p.id); }); });
+  }
+  renderBoard(); rail(); save();
+  say(pr.name);
+}
+
+function rail() {
+  var all = presets();
+  $('#rail').innerHTML = Object.keys(all).map(function (k) {
+    return '<button class="chip" type="button" data-arr="' + esc(k) + '" aria-pressed="' +
+      (S.arrangement === k ? 'true' : 'false') + '">' + esc(all[k].name) + '</button>';
+  }).join('');
+  $$('#rail [data-arr]').forEach(function (b) {
+    b.addEventListener('click', function () { applyPreset(b.dataset.arr); });
+    b.addEventListener('contextmenu', function (e) {
+      if (!(S.custom[S.mode] || {})[b.dataset.arr]) return;   // presets are not deletable
+      e.preventDefault();
+      delete S.custom[S.mode][b.dataset.arr];
+      if (S.arrangement === b.dataset.arr) S.arrangement = null;
+      rail(); save(); say('Arrangement removed');
+    });
+  });
+}
+
+$('#saveArr').addEventListener('click', function () {
+  var name = window.prompt('Name this arrangement (saved under ' + S.mode.toUpperCase() + ')');
+  if (!name || !name.trim()) return;
+  var key = 'u_' + name.trim().toLowerCase().replace(/\W+/g, '_');
+  if (S.mode === 'loose') {
+    var geo = {};
+    S.open.forEach(function (id) {
+      var w = S.wins[id];
+      geo[id] = [Math.round(w.x), Math.round(w.y), Math.round(w.w), Math.round(w.h)];
+    });
+    S.custom.loose[key] = { name: name.trim(), open: S.open.slice(), geo: geo };
+  } else {
+    S.custom.locked[key] = { name: name.trim(), decks: clone(S.layout.decks) };
+  }
+  S.arrangement = key;
+  rail(); save();
+  say('Saved ' + name.trim() + ' under ' + S.mode + '. Right-click a saved arrangement to remove it.');
+});
+
+/* ==========================================================================
+   CHROME
+   ========================================================================== */
+function syncStick() {
+  var st = $('#stick');
+  if (!st.childElementCount) {
+    st.innerHTML = Object.keys(P).map(function (id) {
+      return '<button class="slug" type="button" data-slug="' + id + '"><span class="mark"></span>' + esc(P[id].title) + '</button>';
+    }).join('') + '<span style="flex:1 1 auto"></span><span class="note" id="stickHint"></span>';
+    $$('[data-slug]', st).forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.dataset.slug;
+        if (S.open.indexOf(id) >= 0 && !(S.wins[id] && S.wins[id].min)) lift(id);
+        else setIn(id);
+      });
+    });
+  }
+  $$('[data-slug]', st).forEach(function (b) {
+    var id = b.dataset.slug;
+    var on = S.open.indexOf(id) >= 0 && !(S.mode === 'loose' && S.wins[id] && S.wins[id].min);
+    b.dataset.open = on ? '1' : '0';
+  });
+  $('#stickHint').textContent = S.mode === 'loose'
+    ? 'Alt+← → square up · Alt+↓ set aside'
+    : 'Drag a pane head onto another to swap · Alt+arrows · pull a gutter to resize';
+}
+
+function projects() {
+  var ps = PT.projects();
+  if (!ps.length) S.project = null;
+  else if (!PT.project(S.project)) S.project = ps[0].id;
+  $('#projSel').innerHTML = ps.map(function (p) {
+    return '<option value="' + p.id + '"' + (p.id === S.project ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+  }).join('');
+  conditions(); paintAll();
+}
+
+function conditions() {
+  var ps = PT.projects();
+  if (!ps.length) { $('#cond').textContent = 'No sections'; return; }
+  var avg = ps.reduce(function (a, p) { return a + PT.health(p.id); }, 0) / ps.length;
+  var word = avg > .72 ? 'Clear' : avg > .55 ? 'Fair' : avg > .42 ? 'Unsettled' : 'Heavy weather';
+  var s = PT.stats();
+  $('#cond').textContent = word + ' · ' + s.overdue + ' past due · ' + s.hoursLeft + 'h out';
+}
+
+$('#projSel').addEventListener('change', function () {
+  S.project = this.value; S.selected = null; paintAll(); save();
+});
+
+$('#dusk').addEventListener('click', function () {
+  var d = document.documentElement.dataset.edition === 'dusk';
+  document.documentElement.dataset.edition = d ? 'day' : 'dusk';
+  this.setAttribute('aria-pressed', String(!d));
+  try { localStorage.setItem(KEY + '-dusk', d ? '0' : '1'); } catch (e) {}
+});
+
+addEventListener('keydown', function (e) {
+  var ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+  if (!S.selected) return;
+  var t = PT.task(S.selected); if (!t) return;
+  var order = ['todo', 'doing', 'done'], i = order.indexOf(t.status);
+  if (e.key === ']') { e.preventDefault(); PT.moveTask(t.id, order[Math.min(2, i + 1)]); }
+  else if (e.key === '[') { e.preventDefault(); PT.moveTask(t.id, order[Math.max(0, i - 1)]); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault(); PT.removeTask(t.id); S.selected = null; say('Spiked ' + t.title);
+  }
+});
+
+/* ==========================================================================
+   PERSISTENCE + BOOT
+   ========================================================================== */
+function save() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({
+      mode: S.mode, open: S.open, wins: S.wins, layout: S.layout,
+      custom: S.custom, project: S.project, arrangement: S.arrangement,
+    }));
+  } catch (e) { /* private mode — the arrangement just won't survive a reload */ }
+}
+
+function load() {
+  try {
+    var raw = localStorage.getItem(KEY); if (!raw) return false;
+    var s = JSON.parse(raw); if (!s || !s.open || !s.open.length) return false;
+    S.open = s.open.filter(function (id) { return !!P[id]; });
+    if (!S.open.length) return false;
+    S.mode = s.mode === 'locked' ? 'locked' : 'loose';
+    S.wins = s.wins || {};
+    S.custom = s.custom && s.custom.loose ? s.custom : { loose: {}, locked: {} };
+    S.arrangement = s.arrangement || null;
+    if (s.project && PT.project(s.project)) S.project = s.project;
+    if (s.layout && s.layout.decks) {
+      s.layout.decks.forEach(function (d) { d.panes = d.panes.filter(function (p) { return !!P[p.id]; }); });
+      s.layout.decks = s.layout.decks.filter(function (d) { return d.panes.length; });
+      if (s.layout.decks.length) S.layout = s.layout;
+    }
+    Object.keys(S.wins).forEach(function (id) { zTop = Math.max(zTop, S.wins[id].z || 0); });
+    return true;
+  } catch (e) { return false; }
+}
+
+var rt = 0;
+addEventListener('resize', function () {
+  clearTimeout(rt);
+  rt = setTimeout(function () {
+    if (S.mode === 'loose' && !narrow()) {
+      S.open.forEach(function (id) { if (S.wins[id]) { clampGeo(S.wins[id]); applyGeo(id); } });
+    } else {
+      renderBoard();   // only a rebuild adds/removes gutters across the breakpoint
+    }
+  }, 140);
+});
+
+PT.on('change', function () { conditions(); paintAll(); });
+
+try { if (localStorage.getItem(KEY + '-dusk') === '1') {
+  document.documentElement.dataset.edition = 'dusk';
+  $('#dusk').setAttribute('aria-pressed', 'true');
+} } catch (e) {}
+
+if (!load()) {
+  S.mode = 'loose';
+  S.arrangement = 'morning';
+}
+document.body.dataset.mode = S.mode;
+var initial = $('#m-' + S.mode); if (initial) initial.checked = true;
+
+projects();
+if (S.arrangement === 'morning' && !Object.keys(S.wins).length) applyPreset('morning');
+else { renderBoard(); rail(); }
+if (S.mode === 'loose' && S.open[0]) focusSheet(S.open[0]);
+})();
+</script>
+</body>
+</html>

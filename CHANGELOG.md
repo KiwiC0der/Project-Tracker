@@ -9,6 +9,61 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.6.0] — 2026-08-22
+
+### Fixed
+
+- **Popovers fell behind board panels after sustained use.** The board host was
+  `position: relative` with `z-index: auto` — no stacking context — so the panel
+  z-counter, which increments on every click and persists, escaped into the root.
+  Measured: 60 panel clicks pushed panel z to **88**, past the popover layer at
+  80, and `elementFromPoint` at a popover's centre returned a panel. A fresh page
+  always passed, which is why earlier testing missed it. The host now carries
+  `z-index: 0`. This was a **regression of a bug already fixed in the prototype**,
+  whose comment reads "z-index:0 is load-bearing, not decoration"; the reasoning
+  is now in the TSX so it does not get deleted a third time.
+- **Panels could be dragged off the board, horizontally and vertically.** The
+  clamp allowed 90px of overhang to keep a drag head grabbable, and the host was
+  `overflow-x: visible`, so a panel could sit past the footer or off the right
+  edge and scroll the document. Panels are now fully contained (60 clamp cases,
+  0 containment failures, including drags to 4000×3000), with `overflow-clip` as
+  a second line. Shrinking the window pulls stranded panels back inside.
+- Saved z values are normalised to 20, 21, 22… on load, so a long-lived install
+  cannot creep upward forever.
+- **The last native `confirm()`** — on task delete — is gone. Deletion is now
+  reversible, so a blocking dialog was asking permission for something already
+  undoable.
+
+### Added
+
+- **Maximise on loose panels.** Double-click a header, or use the new button
+  beside the ✕. Restore replays the *exact* stored rectangle — verified lossless:
+  `[0,89,353,266]` → fills the board → back to `[0,89,353,266]`. Loose-only; the
+  control is absent in locked mode, where a panel already fills its tile.
+- **Progress, Priorities, Stale and Notes are full pages**, not shortcuts that
+  bounced you back to the dashboard. Each is rebuilt at page scale from the same
+  exported `insights` functions rather than reusing panel JSX — so Priorities
+  shows the whole ranked queue instead of one task, and Stale shows everything
+  instead of the top 8. Both Notes surfaces share one `localStorage` key
+  (verified byte-identical), so a note written on either appears on the other.
+- **Toasts** (`sonner`, 9.9 kB gzip, lazy) confirming project create / save /
+  delete, and **a real Undo on task delete** — it re-creates the row via the
+  backend, not just React state, so it survives a reload. Verified in the store.
+- **A confetti burst** (`canvas-confetti`, 4.3 kB gzip, lazy) on one milestone
+  only: completing the *last open task* in a project. Hard no-ops under
+  `prefers-reduced-motion`, subscribed rather than sampled.
+- **`src/lib/enhancements.ts`** — flip `toasts` or `celebrate` to `false` and
+  Rollup drops the dependency entirely. Verified: zero trace in the bundle.
+- A favicon, clearing the last console 404.
+
+### Notes
+
+`NumberTicker` was **rejected** during sourcing: it needs `motion` at ~116 kB
+gzip — roughly half this app's bundle — to animate a counter. Recorded in
+`docs/SOURCED-COMPONENTS.md`, because the reasoning outlasts the decision.
+
+---
+
 ## [2.5.1] — 2026-08-22
 
 ### Fixed
@@ -356,6 +411,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.6.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.6.0
 [2.5.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.1
 [2.5.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.4.0

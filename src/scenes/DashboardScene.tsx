@@ -25,19 +25,27 @@ import {
   type Appearance, type ThemeId, type ModeId, type FontId, type DensityId,
   type ResolvedMode, type SidebarPrefs, type SidebarGroupId,
 } from '@/lib/prefs'
+import { notify } from '@/components/ui/toast'
+import { celebrate } from '@/components/ui/celebrate'
 import { RELEASES, REPO } from '@/lib/releases'
-import { Workboard, PANELS, type PanelId, type PanelFocus } from '@/components/board/Workboard'
+import { Workboard, PANELS, type PanelId } from '@/components/board/Workboard'
 import { TaskDialog } from '@/components/board/TaskDialog'
 import {
   ProjectDialog, projectTone, PROJECT_STATUSES, type ProjectDraft,
 } from '@/components/board/ProjectDialog'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from '@/components/board/shared'
 
-type View = 'dashboard' | 'list' | 'calendar' | 'reports' | 'versions' | 'settings'
+type View =
+  | 'dashboard' | 'list' | 'progress' | 'priorities' | 'stale' | 'notes'
+  | 'calendar' | 'reports' | 'versions' | 'settings'
 
 const VIEWS: Record<View, { title: string; icon: JSX.Element }> = {
   dashboard: { title: 'Dashboard', icon: <LayoutDashboard size={16} /> },
   list: { title: 'List', icon: <ListTodo size={16} /> },
+  progress: { title: 'Progress', icon: <Gauge size={16} /> },
+  priorities: { title: 'Priorities', icon: <Flag size={16} /> },
+  stale: { title: 'Stale', icon: <Hourglass size={16} /> },
+  notes: { title: 'Notes', icon: <StickyNote size={16} /> },
   calendar: { title: 'Calendar', icon: <CalIcon size={16} /> },
   reports: { title: 'Reports', icon: <BarChart3 size={16} /> },
   versions: { title: 'Versions', icon: <History size={16} /> },
@@ -47,39 +55,30 @@ const VIEWS: Record<View, { title: string; icon: JSX.Element }> = {
 /* ============================================================================
    SIDEBAR ENTRIES
 
-   What each editable group can contain. `WORKSPACE_ENTRIES` deliberately mixes
-   two kinds of destination — the two full views, and the dashboard's panels —
-   because from the reader's side they are the same thing: places to go. The
-   `kind` discriminates what clicking one actually does.
+   Every entry is one kind of thing: a destination, a full view. Progress,
+   Priorities, Stale and Notes used to be a second kind that sent you back to
+   the dashboard and popped a panel open there — a sidebar row that moved you
+   somewhere you had not asked to go. They are pages now, so the discriminated
+   union those needed is gone and this group does one job again.
 
-   The panel titles come from Workboard's PANELS registry rather than being
-   retyped, so renaming a panel there renames it here too.
+   The dashboard's floating board still carries all five panels. This list is
+   about where a click TAKES you, not about what the board contains.
    ========================================================================== */
-type Entry =
-  | { id: string; kind: 'view'; view: View; label: string; icon: JSX.Element }
-  | { id: string; kind: 'panel'; panel: PanelId; label: string; icon: JSX.Element }
+interface Entry { id: string; view: View; label: string; icon: JSX.Element }
 
-const PANEL_ICON: Record<PanelId, JSX.Element> = {
-  list: <ListTodo size={16} />,
-  progress: <Gauge size={16} />,
-  priorities: <Flag size={16} />,
-  stale: <Hourglass size={16} />,
-  notes: <StickyNote size={16} />,
-}
+const entryFor = (v: View): Entry =>
+  ({ id: v, view: v, label: VIEWS[v].title, icon: VIEWS[v].icon })
 
-/** `list` is omitted as a panel: the List VIEW is already in this group, and
-    two entries labelled "List" doing different things is a puzzle, not a
-    feature. */
-const WORKSPACE_ENTRIES: Entry[] = [
-  { id: 'dashboard', kind: 'view', view: 'dashboard', label: 'Dashboard', icon: VIEWS.dashboard.icon },
-  { id: 'list', kind: 'view', view: 'list', label: 'List', icon: VIEWS.list.icon },
-  ...(['progress', 'priorities', 'stale', 'notes'] as PanelId[]).map((p): Entry => ({
-    id: `panel:${p}`, kind: 'panel', panel: p, label: PANELS[p].title, icon: PANEL_ICON[p],
-  })),
-]
+const WORKSPACE_ENTRIES: Entry[] =
+  (['dashboard', 'list', 'progress', 'priorities', 'stale', 'notes'] as View[]).map(entryFor)
 
-const MORE_ENTRIES: Entry[] = (['calendar', 'reports', 'versions', 'settings'] as View[])
-  .map((v): Entry => ({ id: v, kind: 'view', view: v, label: VIEWS[v].title, icon: VIEWS[v].icon }))
+const MORE_ENTRIES: Entry[] =
+  (['calendar', 'reports', 'versions', 'settings'] as View[]).map(entryFor)
+
+/** Ids saved by builds where those four were panel entries (`panel:notes` and
+    friends). They name the same destinations, so an already-customised sidebar
+    keeps its rows rather than quietly losing them to the filter below. */
+const canonicalId = (id: string) => (id.startsWith('panel:') ? id.slice('panel:'.length) : id)
 
 /** Which entries a group shows. `null` prefs mean "this build's default set",
     so a later version adding an entry shows it to everyone who never opened
@@ -87,11 +86,21 @@ const MORE_ENTRIES: Entry[] = (['calendar', 'reports', 'versions', 'settings'] a
     into storage. Unknown saved ids are dropped on the way out. */
 function visibleEntries(all: Entry[], chosen: string[] | null, fallback: string[]): Entry[] {
   const want = chosen ?? fallback
-  return want.map((id) => all.find((e) => e.id === id)).filter((e): e is Entry => Boolean(e))
+  return want
+    .map((id) => all.find((e) => e.id === canonicalId(id)))
+    .filter((e): e is Entry => Boolean(e))
 }
 
-const WORKSPACE_DEFAULT = ['dashboard', 'list']
+/** All six by default. They were opt-in while they were panel shortcuts —
+    half-destinations worth hiding. Each is a page like List now, and a page
+    nobody can find is a page nobody has. */
+const WORKSPACE_DEFAULT = WORKSPACE_ENTRIES.map((e) => e.id)
 const MORE_DEFAULT = MORE_ENTRIES.map((e) => e.id)
+
+/** Views showing one project's work, so the picker in the top bar changes what
+    you are reading rather than sitting there inert. Stale is deliberately not
+    among them: work you have forgotten is not filed by project in your head. */
+const PROJECT_SCOPED = new Set<View>(['dashboard', 'list', 'progress', 'priorities', 'notes'])
 
 /* ============================================================================
    GROUP EDITOR — the "+" on a group header
@@ -276,16 +285,6 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     })
   }, [])
 
-  /** A panel entry navigates to the dashboard AND asks the board to open that
-      panel. The nonce is what makes a repeat click work: without it the prop
-      would be unchanged and the effect would not re-run, so clicking "Notes"
-      twice would do nothing the second time. */
-  const [panelFocus, setPanelFocus] = useState<PanelFocus | null>(null)
-  const showPanel = useCallback((id: PanelId) => {
-    setView('dashboard')
-    setPanelFocus({ id, nonce: Date.now() })
-  }, [])
-
   /** The project open in the edit dialog, or null. Separate from `creating` so
       one dialog component can serve both without a mode flag at the call site. */
   const [editingProject, setEditingProject] = useState<string | null>(null)
@@ -363,13 +362,26 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       return r ? { ...x, position: r.position } : x
     }))
 
+    /* The one milestone worth celebrating: this task was the LAST open one in
+       its project. Firing on every completed task would make the gesture
+       meaningless within a morning — and `t.status !== status` keeps a
+       reorder WITHIN the done column from re-triggering it. */
+    const finishedProject =
+      status === 'done' &&
+      t.status !== 'done' &&
+      !tasks.some((x) => x.project_id === t.project_id && x.id !== id && x.status !== 'done')
+
     try {
       await applyOrder({ id, status, position: plan.position }, plan.renumber)
+      if (finishedProject) {
+        celebrate()
+        notify.success(`Every task in "${projects.find((p) => p.id === t.project_id)?.name ?? 'this project'}" is done`)
+      }
     } catch (err) {
       setTasks(prev)
       setError(err instanceof Error ? err.message : 'Could not move that task.')
     }
-  }, [tasks])
+  }, [tasks, projects])
 
   /** Status change with no opinion about where — lands at the end of the column. */
   const move = useCallback((id: string, status: TaskStatus) => {
@@ -379,12 +391,38 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     return reorder(id, status, rest.length)
   }, [tasks, reorder])
 
+  /**
+   * Delete a task, offering a real undo.
+   *
+   * The undo re-creates the row rather than just restoring React state. A
+   * toast that says "Undo" and only repaints the board would be a lie: the
+   * row is already gone from the backend, and the task would evaporate on the
+   * next load. Re-creating means a new id — acceptable, because nothing the
+   * user can see is keyed on it — and the restored row carries its status,
+   * priority, notes and due date back.
+   */
   const remove = useCallback(async (id: string) => {
     const prev = tasks
+    const doomed = tasks.find((t) => t.id === id)
     setTasks((cur) => cur.filter((t) => t.id !== id))
     if (selected === id) setSelected(null)
     try {
       await deleteTask(id)
+      if (!doomed) return
+      notify.undo(`Deleted "${doomed.title}"`, async () => {
+        try {
+          const back = await createTask(doomed.project_id, doomed.title, doomed.status, doomed.priority)
+          const rest: Partial<Task> = {
+            notes: doomed.notes,
+            due_date: doomed.due_date,
+            position: doomed.position,
+          }
+          await updateTask(back.id, rest)
+          setTasks((cur) => [...cur, { ...back, ...rest }])
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Could not restore that task.')
+        }
+      })
     } catch (err) {
       setTasks(prev)
       setError(err instanceof Error ? err.message : 'Could not delete that task.')
@@ -426,6 +464,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     setProjects((cur) => cur.map((p) => (p.id === id ? { ...p, ...d } : p)))
     try {
       await updateProject(id, d)
+      notify.success('Project saved')
       setEditingProject(null)
       return null
     } catch (err) {
@@ -452,6 +491,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       setActiveProject(p.id)
       setView('list')
       setCreatingProject(false)
+      notify.success(`Created "${p.name}"`)
       return null
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not create that project.'
@@ -472,12 +512,17 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
    * instead of throwing lets the dialog show the failure inline and stay open.
    */
   const removeProject = useCallback(async (id: string) => {
+    const doomed = projects.find((p) => p.id === id)
     try {
       await deleteProject(id)
       const rest = projects.filter((p) => p.id !== id)
       setProjects(rest)
       setTasks((cur) => cur.filter((t) => t.project_id !== id))
       if (activeProject === id) setActiveProject(rest[0]?.id ?? null)
+      // No undo offered: restoring a project means re-creating it AND every
+      // task under it, and a button labelled Undo that half-works is worse
+      // than no button. The dialog already confirmed by name.
+      notify.success(`Deleted "${doomed?.name ?? 'project'}"`)
       return null
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not delete that project.'
@@ -529,8 +574,8 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               {visibleEntries(WORKSPACE_ENTRIES, sidebar.workspace, WORKSPACE_DEFAULT).map((e) => (
                 <SidebarMenuItem key={e.id}>
                   <SidebarMenuButton
-                    active={e.kind === 'view' ? view === e.view : false}
-                    onClick={() => (e.kind === 'view' ? setView(e.view) : showPanel(e.panel))}
+                    active={view === e.view}
+                    onClick={() => setView(e.view)}
                   >
                     {e.icon}{e.label}
                   </SidebarMenuButton>
@@ -604,8 +649,8 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               {visibleEntries(MORE_ENTRIES, sidebar.more, MORE_DEFAULT).map((e) => (
                 <SidebarMenuItem key={e.id}>
                   <SidebarMenuButton
-                    active={e.kind === 'view' && view === e.view}
-                    onClick={() => e.kind === 'view' && setView(e.view)}
+                    active={view === e.view}
+                    onClick={() => setView(e.view)}
                   >
                     {e.icon}{e.label}
                   </SidebarMenuButton>
@@ -657,10 +702,14 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               <Loader2 className="animate-spin" />
             </div>
           ) : view === 'dashboard' ? (
-            <Workboard ctx={ctx} focus={panelFocus} />
+            <Workboard ctx={ctx} />
           ) : (
             <div className="scene-enter flex-1 overflow-auto p-4 sm:p-6">
               {view === 'list' && <ListView ctx={ctx} onDeleteProject={askDeleteProject} />}
+              {view === 'progress' && <ProgressView ctx={ctx} />}
+              {view === 'priorities' && <PrioritiesView ctx={ctx} />}
+              {view === 'stale' && <StaleView ctx={ctx} />}
+              {view === 'notes' && <NotesView ctx={ctx} />}
               {view === 'calendar' && <CalendarView ctx={ctx} />}
               {view === 'reports' && <ReportsView ctx={ctx} />}
               {view === 'versions' && <VersionsView />}
@@ -734,7 +783,7 @@ function TopBar({
       <SidebarTrigger />
       <h1 className="ui-face text-sm font-semibold">{VIEWS[view].title}</h1>
 
-      {(view === 'dashboard' || view === 'list') && projects.length > 0 && (
+      {PROJECT_SCOPED.has(view) && projects.length > 0 && (
         <>
           <label className="sr-only" htmlFor="proj">Active project</label>
           <select
@@ -1152,6 +1201,611 @@ function ListView({ ctx, onDeleteProject }: { ctx: Ctx; onDeleteProject: (id: st
       </div>
       <QuickAdd ctx={ctx} />
       <BoardColumns ctx={ctx} />
+    </div>
+  )
+}
+
+/* ==========================================================================
+   PAGE FURNITURE
+
+   The four analysis pages below are the full-page form of what the dashboard's
+   floating board shows in a panel. They are drawn from `lib/insights` again
+   rather than being the panel bodies stretched, because a 300px panel and a
+   1100px page are not the same design: a panel abbreviates to survive, a page
+   can afford the ranked list, the comparison table and the axis labels that
+   the abbreviation was standing in for. The board keeps its panels either way.
+   ========================================================================== */
+
+/** The heading every page opens with — what you are looking at, then one line
+    saying what it means. Same rule and rhythm as ListView's header. */
+function PageHead({ title, lede, project }: {
+  title: string
+  lede: React.ReactNode
+  project?: Project | null
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border pb-3">
+      <h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
+      {project && (
+        <span className="num flex items-baseline gap-1.5 text-xs text-muted">
+          <span
+            aria-hidden="true"
+            className="h-2 w-2 shrink-0 self-center rounded-full"
+            style={{ background: projectTone(project.color) }}
+          />
+          {project.name}
+        </span>
+      )}
+      <p className="w-full text-sm text-muted">{lede}</p>
+    </div>
+  )
+}
+
+function Tile({ label, value, warn }: { label: string; value: React.ReactNode; warn?: boolean }) {
+  return (
+    <div className="rounded-xl border border-border bg-surface p-3">
+      <p className={`num text-2xl font-semibold ${warn ? 'text-brand' : ''}`}>{value}</p>
+      <p className="ui-face mt-1 text-[0.6rem] uppercase tracking-wider text-muted">{label}</p>
+    </div>
+  )
+}
+
+function PageCard({ title, aside, className, children }: {
+  title: string
+  aside?: React.ReactNode
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className={`rounded-xl border border-border bg-surface p-4 ${className ?? ''}`}>
+      <h3 className="ui-face mb-2 flex items-baseline gap-2 text-[0.65rem] font-semibold uppercase tracking-wider text-muted">
+        {title}
+        {aside != null && <span className="num ml-auto tracking-normal">{aside}</span>}
+      </h3>
+      {children}
+    </section>
+  )
+}
+
+/** Key/value row — the page-scale twin of the board's `Fig`. */
+function KV({ k, v, warn }: { k: string; v: React.ReactNode; warn?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 border-b border-border-soft py-1.5 last:border-0">
+      <span className="text-sm text-muted">{k}</span>
+      <span className={`num text-sm font-semibold ${warn ? 'text-brand' : ''}`}>{v}</span>
+    </div>
+  )
+}
+
+/** Same answer on every project-scoped page, so it is written once. */
+const NoProject = () => (
+  <p className="text-sm text-muted">No projects yet — create one from the sidebar.</p>
+)
+
+/** A task's priority as the dot the board uses, so the two read alike. */
+const PRIORITY_TONE: Record<string, string> = {
+  high: 'var(--color-brand)',
+  medium: 'var(--color-doing)',
+  low: 'var(--color-muted)',
+}
+
+/** "at this pace, this date" — or an honest refusal. */
+const landing = (f: I.Forecast) =>
+  f.done ? 'complete' : !isFinite(f.days) ? 'no pace' : I.shortDate(f.date!.getTime())
+
+/* ==========================================================================
+   PROGRESS
+
+   The panel answers "how is this project doing" in nine figures and a sparkline.
+   The page answers it, then answers the question that always comes next —
+   "compared to what?" — with the same numbers for every project at once.
+   ========================================================================== */
+function ProgressView({ ctx }: { ctx: Ctx }) {
+  const p = ctx.projects.find((x) => x.id === ctx.activeProject)
+  if (!p) return <NoProject />
+
+  const s = I.stats(ctx.projectTasks)
+  const m = I.momentum(ctx.tasks)
+  const f = I.forecast(ctx.projectTasks, ctx.tasks)
+  const trend = m.trend > 0.15 ? 'rising' : m.trend < -0.15 ? 'falling' : 'steady'
+  const health = Math.round(I.health(ctx.projectTasks) * 100)
+  const lands = landing(f)
+  const open = s.total - s.done
+
+  const bar = [
+    { k: 'Done', n: s.done, c: 'var(--color-done)' },
+    { k: 'In progress', n: s.doing, c: 'var(--color-doing)' },
+    { k: 'To do', n: s.todo, c: 'var(--color-todo)' },
+  ]
+
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <PageHead
+        title="Progress"
+        project={p}
+        lede={
+          s.total === 0
+            ? 'Nothing filed under this project yet, so there is nothing to measure.'
+            : `${s.pct}% done, ${open} still open${s.overdue > 0 ? `, ${s.overdue} overdue` : ''} · ` +
+              `${lands === 'no pace' ? 'no measurable pace, so no landing date' : `at this pace it lands ${lands}`}.`
+        }
+      />
+
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Tile label="To do" value={s.todo} />
+        <Tile label="In progress" value={s.doing} />
+        <Tile label="Done" value={`${s.done}/${s.total}`} />
+        <Tile label="Overdue" value={s.overdue} warn={s.overdue > 0} />
+        <Tile label="Hours left" value={`${s.hoursLeft}h`} />
+        <Tile label="Health" value={`${health}%`} warn={health < 50} />
+      </div>
+
+      <PageCard title="Where the work sits" aside={`${s.total} tasks`} className="mb-4">
+        <div
+          role="img"
+          aria-label={`${s.done} done, ${s.doing} in progress, ${s.todo} to do`}
+          className="flex h-3 w-full overflow-hidden rounded-full bg-surface-2"
+        >
+          {bar.map((b) => (
+            <span key={b.k} style={{ width: `${(b.n / Math.max(1, s.total)) * 100}%`, background: b.c }} />
+          ))}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+          {bar.map((b) => (
+            <span key={b.k} className="num flex items-center gap-1.5 text-[0.7rem] text-muted">
+              <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ background: b.c }} />
+              {b.k} {b.n}
+            </span>
+          ))}
+        </div>
+      </PageCard>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PageCard title="Burndown — 30 days">
+          <Burndown tasks={ctx.projectTasks} height={170} />
+          <p className="num mt-1 text-[0.65rem] text-muted">
+            Solid = still open · dashed = finished. Rebuilt from created and completion
+            dates, so deleted work is simply gone rather than rewritten.
+          </p>
+        </PageCard>
+
+        <PageCard title="Pace" aside={`${m.windowDays}-day window`}>
+          <KV k="Finished in the window" v={m.completed} />
+          <KV k="Per week" v={`${m.perWeek}/wk`} />
+          <KV k="Per day" v={m.perDay} />
+          <KV k="Trend" v={trend} warn={m.trend < -0.15} />
+          <KV k="Remaining here" v={f.remaining} />
+          <KV k="Lands" v={lands} warn={!isFinite(f.days)} />
+        </PageCard>
+      </div>
+
+      <PageCard title="Every project" className="mt-4">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[30rem] text-sm">
+            <thead>
+              <tr className="ui-face text-[0.6rem] uppercase tracking-wider text-muted">
+                <th scope="col" className="py-1 text-left font-semibold">Project</th>
+                <th scope="col" className="py-1 text-left font-semibold">Complete</th>
+                <th scope="col" className="py-1 text-right font-semibold">Open</th>
+                <th scope="col" className="py-1 text-right font-semibold">Overdue</th>
+                <th scope="col" className="py-1 text-right font-semibold">Lands</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ctx.projects.map((row) => {
+                const rt = ctx.tasks.filter((t) => t.project_id === row.id)
+                const rs = I.stats(rt)
+                const rf = I.forecast(rt, ctx.tasks)
+                return (
+                  <tr key={row.id} className="border-t border-border-soft">
+                    <th scope="row" className="max-w-[12rem] truncate py-1.5 text-left font-normal">
+                      <span
+                        aria-hidden="true"
+                        className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle"
+                        style={{ background: projectTone(row.color) }}
+                      />
+                      {row.name}
+                    </th>
+                    <td className="py-1.5 pr-3">
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-surface-2">
+                          <span className="block h-full rounded-full bg-brand" style={{ width: `${rs.pct}%` }} />
+                        </span>
+                        <span className="num text-[0.7rem] text-muted">{rs.pct}%</span>
+                      </span>
+                    </td>
+                    <td className="num py-1.5 text-right">{rs.total - rs.done}</td>
+                    <td className={`num py-1.5 text-right ${rs.overdue > 0 ? 'font-semibold text-brand' : ''}`}>
+                      {rs.overdue}
+                    </td>
+                    <td className={`num py-1.5 text-right ${!isFinite(rf.days) ? 'text-brand' : ''}`}>
+                      {landing(rf)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </PageCard>
+    </div>
+  )
+}
+
+/* ==========================================================================
+   PRIORITIES
+
+   The panel shows the single next action. The page shows the whole queue and
+   the arithmetic behind it — `score()` was written to be readable back to the
+   user, and a page is the only place there is room to actually do that.
+   ========================================================================== */
+function PrioritiesView({ ctx }: { ctx: Ctx }) {
+  const p = ctx.projects.find((x) => x.id === ctx.activeProject)
+  if (!p) return <NoProject />
+
+  const ranked = ctx.projectTasks
+    .filter((t) => t.status !== 'done')
+    .map((t) => ({ t, s: I.score(t), why: I.explain(t) }))
+    .sort((a, b) => b.s - a.s)
+  const top = ranked[0]
+  const rest = ranked.slice(1)
+
+  const act = (t: Task) => ctx.move(t.id, t.status === 'doing' ? 'done' : 'doing')
+
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <PageHead
+        title="Priorities"
+        project={p}
+        lede={
+          top
+            ? `${ranked.length} open ${ranked.length === 1 ? 'task' : 'tasks'}, ranked by deadline pressure, stated priority, whether you already started, and how long it has sat.`
+            : `Nothing open in ${p.name}. The queue is the reward.`
+        }
+      />
+
+      {top && (
+        <section className="mb-4 rounded-xl border border-brand/40 bg-brand/5 p-4 sm:p-5">
+          <p className="ui-face mb-1.5 text-[0.6rem] font-semibold uppercase tracking-wider text-brand">
+            Do this next
+          </p>
+          <h3 className="text-lg font-semibold leading-snug sm:text-xl">{top.t.title}</h3>
+          <p className="num mt-1 text-xs text-muted">
+            {top.why} · {top.t.priority} priority · score {top.s.toFixed(2)}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button" onClick={() => act(top.t)}
+              className="rounded-lg border border-brand/50 bg-brand/10 px-3 py-1.5 text-xs font-semibold hover:bg-brand/20"
+            >
+              {top.t.status === 'doing' ? 'Mark done' : 'Start it'}
+            </button>
+            <button
+              type="button" onClick={() => ctx.setEditing(top.t.id)}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-surface-2"
+            >
+              Open it
+            </button>
+          </div>
+        </section>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
+        <PageCard title="The queue" aside={rest.length ? `${rest.length} behind it` : undefined}>
+          {rest.length === 0 ? (
+            <p className="text-sm text-muted">
+              {top ? 'Nothing else is waiting.' : 'Nothing open — add something below.'}
+            </p>
+          ) : rest.map((r, i) => (
+            <div
+              key={r.t.id}
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border-soft py-2 last:border-0"
+            >
+              <span className="num w-5 shrink-0 text-[0.7rem] text-muted">{i + 2}</span>
+              <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 self-center rounded-full"
+                style={{ background: PRIORITY_TONE[r.t.priority] ?? 'var(--color-muted)' }} />
+              <button
+                type="button" onClick={() => ctx.setEditing(r.t.id)}
+                className="min-w-0 max-w-full flex-1 truncate text-left text-sm hover:text-brand"
+              >
+                {r.t.title}
+              </button>
+              <span className="num text-[0.65rem] text-muted">{r.why}</span>
+              <button
+                type="button" onClick={() => act(r.t)}
+                className="ml-auto shrink-0 rounded border border-border px-2 py-0.5 text-[0.65rem] hover:bg-surface-2"
+              >
+                {r.t.status === 'doing' ? 'Done' : 'Start'}
+              </button>
+            </div>
+          ))}
+        </PageCard>
+
+        <div className="grid gap-4 content-start">
+          <PageCard title="Capture">
+            <QuickAdd ctx={ctx} />
+          </PageCard>
+          <PageCard title="How the ranking works">
+            <p className="text-sm leading-relaxed text-muted">
+              Nothing here is hand-sorted. Each open task scores on five terms and the
+              queue is that score, descending.
+            </p>
+            <div className="mt-2">
+              <KV k="Deadline pressure" v="×3.2" />
+              <KV k="Stated priority" v="×2.4" />
+              <KV k="Already started" v="+1.6" />
+              <KV k="Left untouched" v="×0.9" />
+              <KV k="Small enough to finish" v="×0.7" />
+            </div>
+          </PageCard>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ==========================================================================
+   STALE
+
+   Deliberately NOT project-scoped, in either form: the whole point is the work
+   you have stopped thinking about, and you do not forget things one project at
+   a time. The panel truncates at eight; the page shows all of it, grouped by
+   project so the pattern is visible rather than just the list.
+   ========================================================================== */
+function StaleView({ ctx }: { ctx: Ctx }) {
+  const open = ctx.tasks.filter((t) => t.status !== 'done')
+  const dead = open
+    .filter((t) => I.staleness(t) > 0.18)
+    .sort((a, b) => I.staleness(b) - I.staleness(a))
+
+  const days = (t: Task) => Math.floor((Date.now() - I.touchedAt(t)) / I.DAY)
+  const hours = Math.round(dead.reduce((a, t) => a + I.estimateOf(t), 0) * 10) / 10
+  const share = open.length ? Math.round((dead.length / open.length) * 100) : 0
+
+  /* Grouped rather than one flat list: "four of these are the same project" is
+     the finding, and a flat list sorted by decay hides it. */
+  const byProject = ctx.projects
+    .map((p) => ({ p, items: dead.filter((t) => t.project_id === p.id) }))
+    .filter((g) => g.items.length > 0)
+  const orphans = dead.filter((t) => !ctx.projects.some((p) => p.id === t.project_id))
+
+  if (dead.length === 0) {
+    return (
+      <div className="mx-auto w-full max-w-6xl">
+        <PageHead
+          title="Stale"
+          lede="Tasks left untouched long enough to be presumed lost, across every project."
+        />
+        <PageCard title="Nothing rotting">
+          <p className="text-sm text-muted">
+            Every one of your {open.length} open {open.length === 1 ? 'task' : 'tasks'} has been
+            touched recently enough to still count as alive. Nothing to bury.
+          </p>
+        </PageCard>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <PageHead
+        title="Stale"
+        lede={`${dead.length} of your ${open.length} open tasks have gone untouched long enough to be presumed lost — every project, not just the one in the bar. Revive them or let them go.`}
+      />
+
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Tile label="Presumed lost" value={dead.length} warn />
+        <Tile label="Share of open" value={`${share}%`} warn={share > 33} />
+        <Tile label="Longest untouched" value={`${days(dead[0])}d`} />
+        <Tile label="Hours parked" value={`${hours}h`} />
+      </div>
+
+      <div className="grid gap-4">
+        {[...byProject, ...(orphans.length ? [{ p: null, items: orphans }] : [])].map((g) => (
+          <PageCard
+            key={g.p?.id ?? 'orphans'}
+            title={g.p?.name ?? 'No project'}
+            aside={`${g.items.length} stale`}
+          >
+            {g.items.map((t) => {
+              const pct = Math.round(I.staleness(t) * 100)
+              return (
+                <div
+                  key={t.id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border-soft py-2.5 last:border-0"
+                >
+                  <div className="min-w-0 flex-1 basis-full sm:basis-auto">
+                    <p className="truncate text-sm italic leading-snug">{t.title}</p>
+                    <p className="num text-[0.65rem] text-muted">
+                      untouched {days(t)}d · {t.status === 'doing' ? 'started and dropped' : 'never started'}
+                      {I.isOverdue(t) && <> · <b className="text-brand">overdue</b></>}
+                    </p>
+                  </div>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span
+                      className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-2"
+                      role="img" aria-label={`${pct}% decayed`}
+                    >
+                      <span className="block h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                    </span>
+                    <span className="num w-9 text-right text-[0.65rem] text-muted">{pct}%</span>
+                  </span>
+                  <span className="flex shrink-0 gap-1.5">
+                    <button type="button" onClick={() => ctx.patch(t.id, { status: 'doing' })}
+                      className="rounded border border-border px-2 py-0.5 text-[0.65rem] hover:bg-surface-2">
+                      Revive
+                    </button>
+                    <button type="button" onClick={() => ctx.remove(t.id)}
+                      className="rounded border border-brand/50 px-2 py-0.5 text-[0.65rem] text-brand hover:bg-brand/10">
+                      Let go
+                    </button>
+                  </span>
+                </div>
+              )
+            })}
+          </PageCard>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ==========================================================================
+   NOTES
+
+   ONE store, two windows onto it. The dashboard's Notes panel and this page
+   read and write the same localStorage key with the same record shape, so a
+   note written in either is the same note in the other — a second store here
+   would not be a nicer page, it would be a way to lose work.
+
+   Notes still have no table, so they are per-device and per-account. Saying so
+   out loud is part of the design, not a disclaimer: nobody should learn that
+   from a cleared cache.
+   ========================================================================== */
+interface Note { id: string; ts: number; project: string | null; text: string }
+
+/** The one key. Both windows derive it from this, so they cannot drift. */
+const notesKey = (userId: string) => `project-tracker-notes:${userId}`
+
+function readNotes(userId: string): Note[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(notesKey(userId)) ?? '[]')
+    return Array.isArray(v) ? (v as Note[]) : []
+  } catch {
+    return []
+  }
+}
+
+function NotesView({ ctx }: { ctx: Ctx }) {
+  const key = notesKey(ctx.user.id)
+  const [notes, setNotes] = useState<Note[]>(() => readNotes(ctx.user.id))
+  const [draft, setDraft] = useState('')
+  const [mine, setMine] = useState(false)
+
+  /* Another tab — or an older tab still showing the board — writing the same
+     key is the same store changing under us, not a conflict to resolve. */
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === key) setNotes(readNotes(ctx.user.id))
+    }
+    addEventListener('storage', onStorage)
+    return () => removeEventListener('storage', onStorage)
+  }, [key, ctx.user.id])
+
+  const commit = (next: Note[]) => {
+    setNotes(next)
+    try { localStorage.setItem(key, JSON.stringify(next)) } catch { /* no persistence available */ }
+  }
+
+  const addNote = () => {
+    const text = draft.trim()
+    if (!text) return
+    commit([{ id: `n${Date.now().toString(36)}`, ts: Date.now(), project: ctx.activeProject, text }, ...notes])
+    setDraft('')
+  }
+
+  const project = ctx.projects.find((x) => x.id === ctx.activeProject) ?? null
+  const shown = mine && project ? notes.filter((n) => n.project === project.id) : notes
+
+  return (
+    <div className="mx-auto w-full max-w-6xl">
+      <PageHead
+        title="Notes"
+        project={project}
+        lede={
+          notes.length === 0
+            ? 'Somewhere to put a thought that is not a task yet. Saved on this device only — not synced to your account.'
+            : `${notes.length} ${notes.length === 1 ? 'note' : 'notes'}, newest first. Saved on this device only — not synced to your account.`
+        }
+      />
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] lg:items-start">
+        <PageCard title={project ? `New note · ${project.name}` : 'New note'}>
+          <textarea
+            name="note" aria-label={project ? `New note in ${project.name}` : 'New note'}
+            value={draft} rows={5}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote() } }}
+            placeholder="A thought about a task, a project, anything not worth filing yet…"
+            className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button" onClick={addNote} disabled={!draft.trim()}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-surface-2 disabled:opacity-40"
+            >
+              Add note
+            </button>
+            <span className="num text-[0.62rem] text-muted">Enter to add · Shift+Enter for a new line</span>
+          </div>
+          <p className="num mt-3 border-t border-border-soft pt-2 text-[0.62rem] leading-relaxed text-muted">
+            The same notes appear in the dashboard's Notes panel — one store, two
+            windows. Clearing this browser's site data clears both.
+          </p>
+        </PageCard>
+
+        <div>
+          {project && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {[
+                { on: !mine, label: `All notes (${notes.length})`, set: false },
+                { on: mine, label: `${project.name} only`, set: true },
+              ].map((c) => (
+                <button
+                  key={c.label} type="button" aria-pressed={c.on} onClick={() => setMine(c.set)}
+                  className={`rounded-lg border px-2.5 py-1 text-xs ${
+                    c.on ? 'border-brand bg-brand/15' : 'border-border hover:bg-surface-2'}`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {shown.length === 0 ? (
+            <PageCard title="Nothing here yet">
+              <p className="text-sm text-muted">
+                {notes.length === 0
+                  ? 'Write the first one on the left. A note can become a task later — the tokens !high, @fri and /project still work when it does.'
+                  : 'No notes filed under this project. Switch back to all notes.'}
+              </p>
+            </PageCard>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {shown.map((n) => (
+                <article key={n.id} className="flex flex-col rounded-xl border border-border bg-surface p-3">
+                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{n.text}</p>
+                  <p className="num mt-2 text-[0.62rem] text-muted">
+                    {ctx.projects.find((x) => x.id === n.project)?.name ?? 'general'} · {I.relDay(n.ts)}
+                  </p>
+                  <div className="mt-2 flex gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        // Same route as the panel's button: the note text goes
+                        // through the same parser as quick add, so tokens
+                        // written into it carry straight onto the task.
+                        if (await ctx.add(n.text, n.project ?? undefined)) {
+                          commit(notes.filter((x) => x.id !== n.id))
+                        }
+                      }}
+                      className="rounded border border-border px-2 py-0.5 text-[0.65rem] hover:bg-surface-2"
+                    >
+                      Make it a task
+                    </button>
+                    <button
+                      type="button" onClick={() => commit(notes.filter((x) => x.id !== n.id))}
+                      className="rounded border border-brand/50 px-2 py-0.5 text-[0.65rem] text-brand hover:bg-brand/10"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

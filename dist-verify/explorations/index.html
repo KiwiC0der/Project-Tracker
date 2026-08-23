@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variant Lab — Project Tracker</title>
+<meta name="color-scheme" content="dark">
+<style>
+/* ===========================================================================
+   VARIANT LAB — the comparison surface.
+   Deliberately restrained: the five prototypes are the loud ones. This page's
+   only job is to let you judge them against each other and then choose.
+   =========================================================================== */
+:root {
+  --bg: #08080b;
+  --bg-2: #0d0d12;
+  --panel: #101017;
+  --line: #1e1e28;
+  --line-soft: #17171f;
+  --ink: #edeef4;
+  --ink-2: #9a9caa;
+  --ink-3: #636474;
+  --accent: #7c5cff;
+
+  --t-terminal: #4ade80;
+  --t-orbit: #22d3ee;
+  --t-broadsheet: #d8cdb4;
+  --t-workbench: #a78bfa;
+  --t-pulse: #34d399;
+  /* Round two — both are paper, so they are separated by warm vs cool ink
+     rather than by hue, the way two editions of the same paper would be. */
+  --t-pressroom: #e0a04a;
+  --t-compositor: #c9553f;
+  --t-composingroom: #d9743f;
+  --t-dashboard: #b8862f;
+  --t-variants: #d4785a;
+
+  --step-0: 0.8125rem;
+  --step-1: 0.9375rem;
+  --step-2: 1.125rem;
+  --step-3: clamp(1.4rem, 1.1rem + 1.4vw, 2rem);
+  --step-4: clamp(2.2rem, 1.4rem + 3.6vw, 4.5rem);
+
+  --u: 8px;
+  --r: 14px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--bg); color-scheme: dark; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  font-size: var(--step-1);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  /* Two very wide, very dim washes. Cheap (no repaint), and it stops the page
+     reading as flat black behind five extremely saturated previews. */
+  background:
+    radial-gradient(120ch 60ch at 12% -10%, rgba(124, 92, 255, 0.13), transparent 60%),
+    radial-gradient(90ch 50ch at 92% 8%, rgba(34, 211, 238, 0.08), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+a { color: inherit; }
+h1, h2, h3 { line-height: 1.12; letter-spacing: -0.02em; margin: 0; font-weight: 600; }
+p { margin: 0; }
+
+.wrap { width: min(1220px, 100% - calc(var(--u) * 5)); margin-inline: auto; }
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ---------- masthead ---------- */
+.hero { padding: calc(var(--u) * 11) 0 calc(var(--u) * 7); }
+.hero h1 {
+  font-size: var(--step-4);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  margin: calc(var(--u) * 2.5) 0 calc(var(--u) * 2.5);
+  max-width: 20ch;
+}
+.hero h1 em { font-style: normal; color: var(--ink-3); }
+.hero .lede { color: var(--ink-2); max-width: 62ch; font-size: var(--step-2); }
+
+.meta {
+  display: flex; flex-wrap: wrap; gap: calc(var(--u) * 3);
+  margin-top: calc(var(--u) * 5);
+  padding-top: calc(var(--u) * 3);
+  border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: var(--step-0); color: var(--ink-3);
+}
+.meta b { color: var(--ink); font-weight: 500; }
+
+/* ---------- recommendation ---------- */
+.rec {
+  margin: calc(var(--u) * 4) 0 calc(var(--u) * 9);
+  padding: calc(var(--u) * 4);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r);
+  background: linear-gradient(120deg, rgba(124, 92, 255, 0.07), transparent 55%), var(--panel);
+}
+.rec h2 { font-size: var(--step-2); margin-bottom: var(--u); }
+.rec p { color: var(--ink-2); max-width: 78ch; }
+.rec p + p { margin-top: calc(var(--u) * 1.5); }
+.rec strong { color: var(--ink); font-weight: 600; }
+
+/* ---------- variant cards ---------- */
+.grid { display: flex; flex-direction: column; gap: calc(var(--u) * 4); }
+
+.card {
+  --tint: var(--accent);
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  overflow: hidden;
+  transition: border-color 260ms var(--ease), transform 260ms var(--ease);
+}
+.card:hover, .card:focus-within { border-color: color-mix(in srgb, var(--tint) 42%, var(--line)); }
+
+/* --- live preview pane --- */
+.shot {
+  position: relative;
+  background: #000;
+  border-right: 1px solid var(--line);
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+}
+.shot iframe {
+  position: absolute; top: 0; left: 0;
+  width: 1440px; height: 900px;
+  border: 0;
+  transform-origin: 0 0;
+  /* Scaled so a full desktop viewport fits the pane. Recomputed in JS against
+     the real pane width — this value is only the pre-JS starting point. */
+  transform: scale(0.4);
+  /* The preview is a picture, not a control surface. The card's own link is
+     the way in, so the iframe must never swallow clicks or tab stops. */
+  pointer-events: none;
+}
+.shot::after {
+  content: '';
+  position: absolute; inset: 0;
+  box-shadow: inset 0 0 90px 12px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.shot .badge {
+  position: absolute; left: calc(var(--u) * 1.5); top: calc(var(--u) * 1.5);
+  z-index: 2;
+  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.18em;
+  padding: 4px 9px; border-radius: 100px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+  color: var(--tint);
+  backdrop-filter: blur(6px);
+}
+.noframe {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-family: var(--mono); font-size: var(--step-0); color: var(--ink-3);
+  text-align: center; padding: calc(var(--u) * 3); line-height: 1.7;
+}
+
+/* --- body pane --- */
+.body { padding: calc(var(--u) * 4); display: flex; flex-direction: column; gap: calc(var(--u) * 2); }
+.body .num { font-family: var(--mono); font-size: var(--step-0); color: var(--tint); letter-spacing: 0.2em; }
+.body h2 {
+  font-size: var(--step-3); font-weight: 700; letter-spacing: -0.035em;
+  display: flex; align-items: baseline; gap: calc(var(--u) * 1.5); flex-wrap: wrap;
+}
+.body h2 .axis {
+  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 100px; padding: 3px 9px;
+  white-space: nowrap;
+}
+.thesis { color: var(--ink-2); }
+
+dl.spec { margin: var(--u) 0 0; display: grid; gap: calc(var(--u) * 1.5); }
+dl.spec > div { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: calc(var(--u) * 1.5); }
+dl.spec dt {
+  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink-3); padding-top: 3px;
+}
+dl.spec dd { margin: 0; font-size: var(--step-0); color: var(--ink-2); }
+dl.spec dd b { color: var(--ink); font-weight: 600; }
+
+.actions { margin-top: auto; padding-top: calc(var(--u) * 2); display: flex; gap: var(--u); flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: var(--u);
+  min-height: 42px; padding: 0 calc(var(--u) * 2.25);
+  border-radius: 10px; border: 1px solid var(--line);
+  font: 600 var(--step-0)/1 var(--sans); color: var(--ink);
+  text-decoration: none; background: var(--bg-2);
+  transition: background 180ms var(--ease), border-color 180ms var(--ease), transform 180ms var(--ease);
+}
+.btn:hover { background: var(--line-soft); border-color: color-mix(in srgb, var(--tint) 50%, var(--line)); }
+.btn:active { transform: translateY(1px); }
+.btn.primary {
+  background: color-mix(in srgb, var(--tint) 15%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
+  color: var(--tint);
+}
+.btn.primary:hover { background: color-mix(in srgb, var(--tint) 24%, var(--bg-2)); }
+
+/* ---------- matrix ---------- */
+.section { margin-top: calc(var(--u) * 11); }
+.section > h2 { font-size: var(--step-3); margin: calc(var(--u) * 1.5) 0 calc(var(--u) * 3); }
+.section > .sub { color: var(--ink-2); max-width: 70ch; margin-bottom: calc(var(--u) * 4); }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: var(--step-0); }
+th, td { text-align: left; padding: calc(var(--u) * 1.5) calc(var(--u) * 2); border-bottom: 1px solid var(--line-soft); }
+thead th {
+  font-family: var(--mono); font-size: 0.625rem; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 500; white-space: nowrap;
+  position: sticky; top: 0; background: var(--bg-2); z-index: 1;
+}
+tbody th { font-weight: 500; color: var(--ink-2); white-space: nowrap; }
+tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
+td b { color: var(--ink); font-weight: 600; }
+.dash { color: var(--ink-3); }
+
+/* ---------- run notes ---------- */
+.notes { display: grid; gap: calc(var(--u) * 2); grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.note { border: 1px solid var(--line); border-radius: var(--r); padding: calc(var(--u) * 3); background: var(--panel); }
+.note h3 { font-size: var(--step-1); margin-bottom: var(--u); }
+.note p { color: var(--ink-2); font-size: var(--step-0); }
+code, pre {
+  font-family: var(--mono); font-size: 0.8125rem;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+}
+code { padding: 2px 6px; }
+pre { padding: calc(var(--u) * 1.75); overflow-x: auto; margin: calc(var(--u) * 1.5) 0 0; }
+pre code { border: 0; padding: 0; background: none; }
+
+footer {
+  margin-top: calc(var(--u) * 12); padding: calc(var(--u) * 5) 0 calc(var(--u) * 8);
+  border-top: 1px solid var(--line);
+  color: var(--ink-3); font-size: var(--step-0);
+  display: flex; justify-content: space-between; gap: calc(var(--u) * 3); flex-wrap: wrap;
+}
+footer a { color: var(--ink-2); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 900px) {
+  .card { grid-template-columns: 1fr; }
+  .shot { border-right: 0; border-bottom: 1px solid var(--line); aspect-ratio: 16 / 9; }
+  dl.spec > div { grid-template-columns: 1fr; gap: 2px; }
+  .hero { padding-top: calc(var(--u) * 6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <p class="kicker">Project Tracker · Design Exploration</p>
+    <h1>Nine directions.<br><em>One engine. Pick one.</em></h1>
+    <p class="lede">
+      Nine complete redesigns of Project Tracker, each running on the same shared kernel —
+      identical data, identical seed, identical maths. So what you are comparing here
+      is design, not whose fake tasks read better.
+    </p>
+    <div class="meta">
+      <span><b>4</b> projects</span>
+      <span><b>34</b> tasks</span>
+      <span><b>5 weeks</b> of synthetic history</span>
+      <span><b>0</b> network requests</span>
+      <span><b>0</b> dependencies</span>
+    </div>
+  </header>
+
+  <section class="rec" aria-labelledby="rec-h">
+    <p class="kicker">Where this landed</p>
+    <h2 id="rec-h">Build this one: <span style="color:var(--t-dashboard)">DASHBOARD</span></h2>
+    <p>
+      Round one put five directions up. <strong>BROADSHEET</strong> and <strong>WORKBENCH</strong>
+      came out ahead — the paper-and-ink look, and the snap-in windows. Round two fuses them, two
+      different ways, because there are exactly two honest answers to "windows, but printed".
+    </p>
+    <p>
+      <strong>PRESS ROOM</strong> keeps WORKBENCH's mechanics literally: loose sheets on a light
+      table, free geometry, overlap allowed, edge snapping, saved arrangements. Maximum
+      flexibility. <strong>COMPOSITOR</strong> refuses to let anything overlap — the viewport is a
+      page and panes are set into it, rearranged by swapping and by pulling gutters. Nothing ever
+      hides behind anything, and the page is always full.
+    </p>
+    <p>
+      <strong>COMPOSING ROOM</strong> put both on a radio: arrange sheets freely when you are
+      thinking, lock the page up when you are working. <strong>DASHBOARD</strong> is that engine
+      wearing the real app's clothes — the retractable sidebar, Dashboard / List / Calendar /
+      Reports / Settings, panels you can resize from any edge <em>or corner</em>. It is the
+      production candidate: drop it in where the four stat cards are today.
+    </p>
+  </section>
+
+  <section class="section" aria-labelledby="r2-h" style="margin-top:calc(var(--u) * 6)">
+    <p class="kicker">Round two</p>
+    <h2 id="r2-h">Broadsheet × Workbench</h2>
+    <p class="sub">
+      Same six panels throughout — Galley, Schedule, Ledger, Copy Desk, Wire and Morgue — so the
+      only thing that differs is how the page is put together.
+    </p>
+    <div class="grid" id="grid2"></div>
+  </section>
+
+  <section class="section" aria-labelledby="r1-h">
+    <p class="kicker">Round one</p>
+    <h2 id="r1-h">The original five</h2>
+    <p class="sub">Where the two winners came from.</p>
+  </section>
+
+  <main class="grid" id="grid">
+    <!-- cards injected here; see VARIANTS below -->
+  </main>
+
+  <section class="section" aria-labelledby="cmp-h">
+    <p class="kicker">Side by side</p>
+    <h2 id="cmp-h">How they differ</h2>
+    <p class="sub">
+      Every row is a real capability from the shared kernel. Bold marks the direction
+      that expresses it best.
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Capability</th>
+            <th scope="col">Terminal</th>
+            <th scope="col">Orbit</th>
+            <th scope="col">Broadsheet</th>
+            <th scope="col">Workbench</th>
+            <th scope="col">Pulse</th>
+          </tr>
+        </thead>
+        <tbody id="matrix"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="run-h">
+    <p class="kicker">Practical</p>
+    <h2 id="run-h">Running these</h2>
+    <div class="notes">
+      <div class="note">
+        <h3>Serve them, don't double-click</h3>
+        <p>
+          They will open straight off the filesystem, but Chrome restricts
+          <code>localStorage</code> on <code>file://</code>, so changes will not survive a
+          refresh. Any static server fixes it:
+        </p>
+        <pre><code>npx serve .</code></pre>
+      </div>
+      <div class="note">
+        <h3>Shared state is deliberate</h3>
+        <p>
+          All five read and write the same <code>localStorage</code> key. Complete a task in
+          TERMINAL and it is complete in PULSE. That is the point — it is one app wearing
+          five faces. <b>Reset</b> in any variant restores the seed for all of them.
+        </p>
+      </div>
+      <div class="note">
+        <h3>Nothing is loaded from the network</h3>
+        <p>
+          No CDN, no web fonts, no three.js. Every shader is hand-written WebGL, every chart
+          is hand-drawn canvas or SVG. These files work on a plane.
+        </p>
+      </div>
+      <div class="note">
+        <h3>Where the logic lives</h3>
+        <p>
+          <code>_kernel.js</code> — the data model, the store, the event log, and all the
+          derived intelligence. The variants contain no business logic at all. Porting a
+          winner means keeping the kernel and rewriting one file.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Project Tracker Variant Lab · built on <code>_kernel.js</code></span>
+    <span>
+      <a href="../../docs/TEARDOWN.md">Teardown</a> ·
+      <a href="../../docs/FEATURE-VAULT.md">Feature vault</a> ·
+      <a href="https://github.com/KiwiC0der/Project-Tracker">Repo</a>
+    </span>
+  </footer>
+
+</div>
+
+<script>
+/* ===========================================================================
+   Card + matrix rendering. Data-driven so adding a sixth direction is one
+   object, not a copy-paste of forty lines of markup.
+   =========================================================================== */
+const VARIANTS = [
+  {
+    n: '01', key: 'terminal', name: 'TERMINAL', tint: 'var(--t-terminal)',
+    axis: 'Input modality',
+    thesis: 'The tracker as a living terminal. Not a GUI with a dark theme — a real command surface where typing is the fastest path to everything and the board renders as text.',
+    signature: '<b>replay</b> — steps day by day through your own history and redraws the board in place, like watching a screen recording of your month.',
+    best: 'Speed, and never touching the mouse. History as a first-class object.',
+    cost: 'A learning curve you have to be willing to pay. Hostile to casual users.',
+  },
+  {
+    n: '02', key: 'orbit', name: 'ORBIT', tint: 'var(--t-orbit)',
+    axis: 'Information encoding',
+    thesis: 'Your workload as a solar system. Projects are stars, tasks orbit them, and the physics is the information — orbit radius is time-to-due, speed is urgency, mass is priority.',
+    signature: '<b>Centre of mass</b> — a crosshair marking where your work actually pulls, computed as the score-weighted centroid of every open task. One button flies you there.',
+    best: 'Understanding priority without reading. Genuinely the most impressive.',
+    cost: 'Lowest information density here. Hardest to make accessible.',
+  },
+  {
+    n: '03', key: 'broadsheet', name: 'BROADSHEET', tint: 'var(--t-broadsheet)',
+    axis: 'Temperament',
+    thesis: 'The anti-dashboard. Your work set as a newspaper — serif, columns, rules, ink on paper. A dashboard asks you to scan widgets; a front page tells you what matters in a hierarchy you already know how to read.',
+    signature: '<b>Back issues</b> — the page is an edition with a date. Step backwards and the whole front page re-renders as it was that morning. Plus a weekend retro that writes itself.',
+    best: 'Calm. Prints properly. The only direction here that is restful.',
+    cost: 'No drag and drop, by choice. Slower for bulk editing.',
+  },
+  {
+    n: '04', key: 'workbench', name: 'WORKBENCH', tint: 'var(--t-workbench)',
+    axis: 'Density',
+    thesis: 'A desktop operating system for your work. Not one view at a time — board, Gantt, dependency graph, inspector and console all live at once, arranged by you.',
+    signature: '<b>Workspaces</b> — named window arrangements you can save and switch between. Morning Triage, Deep Work, Weekly Review. Windows animate to their new geometry.',
+    best: 'Adjacency. The only direction that shows you two things at once.',
+    cost: 'The most work to build, and the hardest to make good on a phone.',
+  },
+  {
+    n: '05', key: 'pulse', name: 'PULSE', tint: 'var(--t-pulse)',
+    axis: 'Attention',
+    thesis: 'The tracker as a living organism. Healthy work breathes slowly in warm light; neglected work goes cold and turbulent. Built for a second monitor — ambient until you engage, then sharp.',
+    signature: '<b>The Momentum Engine</b> — pace, landing date and one honest "do this next" with its reasoning shown. Plus focus mode, which dims the world to a single task and a timer.',
+    best: 'Feeling the state of your work. Directly answers the original shader ask.',
+    cost: 'Ambient mode trades density for calm. WebGL needs a real fallback path.',
+  },
+];
+
+const MATRIX = [
+  ['Momentum & velocity',   'stat',            'HUD readout',      'By The Numbers',   'Pulse window',       '<b>Pace</b>'],
+  ['Landing-date forecast',  'stat',            'HUD readout',      'By The Numbers',   'Pulse window',       '<b>Landing</b>'],
+  ['Staleness / decay',      'dimmed rows',     'fade and drift',   '<b>Obituaries</b>', 'graph node size',   'cells go cold'],
+  ['Deadline urgency',       'due marker',      '<b>orbit radius</b>', 'red margin rule', 'Gantt overhang',  'tremor'],
+  ['What to do next',        'next',            '<b>Centre of mass</b>', '<b>Lead story</b>', 'focus this',   '<b>Do This</b>'],
+  ['Natural-language add',   '<b>add</b>',      '+ composer',       'classified ad',    '<b>live preview</b>', 'quick add'],
+  ['Time travel',            '<b>replay</b>',   '<span class="dash">—</span>', '<b>back issues</b>', '<span class="dash">—</span>', '<span class="dash">—</span>'],
+  ['Weekly diff / retro',    '<span class="dash">—</span>', '<span class="dash">—</span>', '<b>Weekend Retro</b>', '<span class="dash">—</span>', '<span class="dash">—</span>'],
+  ['Burndown history',       '<b>ASCII burn</b>', '<span class="dash">—</span>', 'SVG chart', 'Timeline window', 'sparkline'],
+  ['Project health',         'statusline',      '<b>star brightness</b>', 'conditions line', 'wallpaper tint', '<b>shader uniform</b>'],
+  ['Cross-project view',     'cd ..',           '<b>system zoom</b>', 'front page',     '<b>graph + Gantt</b>', 'project rows'],
+  ['Keyboard-only operation','<b>total</b>',    'partial',          'strong',           'strong',             'strong'],
+];
+
+/* Round two — BROADSHEET's look on WORKBENCH's mechanics, split on the one
+   axis that actually matters once you fuse them: may panes overlap or not. */
+const HYBRIDS = [
+  {
+    n: '10', key: 'variants', name: 'THREE DIRECTIONS', tint: 'var(--t-variants)',
+    axis: 'Art direction, not layout',
+    thesis: 'Round three. The layout question is settled — this asks how the settled layout should LOOK. One dashboard, one set of data, three art directions on a switch: A·Console packs it into an instrument panel, B·Quiet dissolves the chrome into an editorial page, C·Signal makes it bold and tactile.',
+    signature: '<b>Nothing here changes the markup.</b> All three directions and all fifteen palettes are CSS hanging off two data attributes — which is the test. A direction that needs different HTML is a different app, not a different skin, and choosing it would mean a rewrite instead of a re-theme.',
+    best: 'Deciding the look with real data in front of you instead of a mood board.',
+    cost: 'It is a preview, not a build. The winner still has to be ported into the app.',
+  },
+  {
+    n: '09', key: 'dashboard', name: 'DASHBOARD', tint: 'var(--t-dashboard)',
+    axis: 'Production candidate',
+    thesis: 'The dual-mode board from COMPOSING ROOM, wearing the chrome of the live app: the retractable sidebar from pt.anteneh.tech, Dashboard / List / Calendar / Reports / Settings, and a light/night toggle. Calendar, Reports and Settings are built here rather than padlocked — this is what those pages could be.',
+    signature: '<b>Lock preserves what you arranged.</b> A recursive guillotine split turns your loose sheets into a real tiling tree, so a tall column beside a stack of three survives the lock — the shape a flat row model simply cannot hold. Resize from any edge or corner.',
+    best: 'Dropping straight into the real app in place of the four stat cards.',
+    cost: 'The most machinery here: two layout engines, a split tree, and five views.',
+  },
+  {
+    n: '06', key: 'pressroom', name: 'PRESS ROOM', tint: 'var(--t-pressroom)',
+    axis: 'Overlapping',
+    thesis: 'A paste-up board. Loose sheets of paper on a light table, moved and squared up by hand — WORKBENCH\'s window manager with every pixel of chrome replaced by print. Depth comes from a hard offset block, the way mis-registered ink does, so the no-shadow rule survives.',
+    signature: '<b>Editions</b> — named arrangements of sheets. Morning, Copy Desk, Press Check. Drag a sheet to a screen edge to square it up, or Alt+arrows from the keyboard.',
+    best: 'Freedom. Park anything anywhere, keep several arrangements on hand.',
+    cost: 'Free geometry means you will spend time tidying it. Sheets can hide behind sheets.',
+  },
+  {
+    n: '07', key: 'compositor', name: 'COMPOSITOR', tint: 'var(--t-compositor)',
+    axis: 'Tiling',
+    thesis: 'The viewport is a printed page and panes are set into it. Nothing overlaps, nothing hides, and the page is always full — because a half-empty page is a mistake in print, not a layout choice. You still rearrange everything; you just do it the way a compositor moves type around a forme.',
+    signature: '<b>Formes</b> — drag one pane\'s head onto another to swap them, pull a gutter to re-proportion the columns. Alt+arrows does both from the keyboard. Save the result as a named forme.',
+    best: 'Never tidying up. Every pane visible at once, always.',
+    cost: 'Less freedom by design — you cannot float a pane over another to compare.',
+  },
+  {
+    n: '08', key: 'composingroom', name: 'COMPOSING ROOM', tint: 'var(--t-composingroom)',
+    axis: 'Both, switchable',
+    thesis: 'Both of the above, on a radio. In a real composing room the stone is where loose type is arranged by hand and the forme is that same type locked up so nothing shifts — same material, two states. LOOSE floats and overlaps; LOCKED tiles into a page. Press Room\'s standing head throughout.',
+    signature: '<b>Lossless switching</b> — LOCKED → LOOSE hands you the exact page you were reading, unlocked in place, nothing moves. LOOSE → LOCKED squares up whatever you arranged, clustering sheets into decks by where you actually put them.',
+    best: 'Not having to choose. Arrange freely, lock it up, carry on.',
+    cost: 'Two layout engines in one file — the most code here, and both share one size floor so the switch can stay exact.',
+  },
+];
+
+function cardHTML(v, total) {
+  return `
+  <article class="card" style="--tint:${v.tint}">
+    <div class="shot">
+      <span class="badge">${v.name}</span>
+      <iframe data-src="./${v.key}.html" title="Live preview of the ${v.name} direction"
+              loading="lazy" tabindex="-1" aria-hidden="true" scrolling="no"></iframe>
+    </div>
+    <div class="body">
+      <p class="num">${v.n} / ${total}</p>
+      <h2>${v.name} <span class="axis">${v.axis}</span></h2>
+      <p class="thesis">${v.thesis}</p>
+      <dl class="spec">
+        <div><dt>Signature</dt><dd>${v.signature}</dd></div>
+        <div><dt>Best at</dt><dd>${v.best}</dd></div>
+        <div><dt>Trade-off</dt><dd>${v.cost}</dd></div>
+      </dl>
+      <div class="actions">
+        <a class="btn primary" href="./${v.key}.html">Open ${v.name} &rarr;</a>
+      </div>
+    </div>
+  </article>
+`;
+}
+
+document.getElementById('grid2').innerHTML = HYBRIDS.map(v => cardHTML(v, '09')).join('');
+document.getElementById('grid').innerHTML  = VARIANTS.map(v => cardHTML(v, '09')).join('');
+
+document.getElementById('matrix').innerHTML = MATRIX.map(row => `
+  <tr><th scope="row">${row[0]}</th>${row.slice(1).map(c => `<td>${c}</td>`).join('')}</tr>
+`).join('');
+
+/* --- Preview scaling -------------------------------------------------------
+   Each iframe renders at a fixed 1440x900 desktop viewport and is scaled to
+   fit its pane, so the thumbnails show the real desktop layout rather than
+   five different mobile breakpoints. */
+function fitPreviews() {
+  document.querySelectorAll('.shot').forEach(shot => {
+    const frame = shot.querySelector('iframe');
+    if (!frame) return;
+    frame.style.transform = 'scale(' + (shot.clientWidth / 1440) + ')';
+  });
+}
+
+/* Load previews only as they approach the viewport — five simultaneous WebGL
+   contexts on first paint is a good way to lose the compositor. Browsers cap
+   live contexts (typically 16) and evict the oldest, so staggering matters. */
+const io = 'IntersectionObserver' in window
+  ? new IntersectionObserver((entries, obs) => {
+      entries.forEach(e => {
+        if (!e.isIntersecting) return;
+        const f = e.target.querySelector('iframe[data-src]');
+        if (f) { f.src = f.dataset.src; delete f.dataset.src; }
+        obs.unobserve(e.target);
+      });
+    }, { rootMargin: '300px' })
+  : null;
+
+document.querySelectorAll('.shot').forEach(shot => {
+  if (io) io.observe(shot);
+  else {
+    const f = shot.querySelector('iframe[data-src]');
+    if (f) { f.src = f.dataset.src; delete f.dataset.src; }
+  }
+});
+
+fitPreviews();
+addEventListener('resize', () => {
+  clearTimeout(window.__fitT);
+  window.__fitT = setTimeout(fitPreviews, 120);
+});
+
+/* If a preview cannot load (opened over file:// with a strict policy, or the
+   file is missing), say so instead of showing an empty black rectangle. */
+document.querySelectorAll('.shot iframe').forEach(f => {
+  f.addEventListener('error', () => {
+    const note = document.createElement('p');
+    note.className = 'noframe';
+    note.textContent = 'Preview unavailable here — open the variant directly, or serve the folder with `npx serve .`';
+    f.replaceWith(note);
+  });
+});
+</script>
+
+</body>
+</html>

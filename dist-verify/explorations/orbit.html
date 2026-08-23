@@ -1,0 +1,2012 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ORBIT — Project Tracker Lab</title>
+<style>
+/* ===========================================================================
+   ORBIT — design tokens
+   Deep-space palette. Every ink value below clears 4.5:1 against --void.
+   =========================================================================== */
+:root{
+  color-scheme: dark;
+
+  --void:        #04050a;
+  --void-warm:   #090c16;
+
+  --ink:         #e9edf6;   /* 17.4:1 */
+  --ink-dim:     #9aa4bb;   /*  8.2:1 */
+  --ink-quiet:   #838fab;   /*  6.1:1 — smallest text still safe */
+
+  /* width the inspector rail steals from the HUD on wide screens */
+  --rail: 0px;
+
+  --accent:      #8fe3ff;
+  --accent-deep: #2b7fa0;
+  --danger:      #ff5568;
+  --live:        #5ef0b6;
+
+  --hair:        rgba(158,170,196,.26);
+  --hair-soft:   rgba(158,170,196,.13);
+
+  --pad:   clamp(13px, 2.2vw, 28px);
+  --micro: clamp(10px, .62vw, 11px);
+  --small: clamp(11.5px, .78vw, 12.5px);
+  --body:  clamp(12.5px, .9vw, 14px);
+  --lede:  clamp(15px, 1.5vw, 20px);
+  --track: .18em;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+
+  --t-fast: 130ms;
+  --t-mid:  300ms;
+  --ease:   cubic-bezier(.22,.61,.36,1);
+}
+
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  background:var(--void);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:var(--body);
+  line-height:1.45;
+  overflow:hidden;              /* the canvas is the page; nothing may scroll */
+  -webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* --- shared micro-typography ------------------------------------------- */
+.lbl{
+  font-size:var(--micro);
+  letter-spacing:var(--track);
+  text-transform:uppercase;
+  color:var(--ink-dim);
+  font-weight:500;
+  white-space:nowrap;
+}
+.val{ font-size:var(--small); color:var(--ink); font-variant-numeric:tabular-nums; }
+
+/* --- canvas ------------------------------------------------------------- */
+#sky{
+  position:fixed; inset:0;
+  width:100%; height:100%;
+  display:block;
+  touch-action:none;            /* we own every gesture */
+  cursor:grab;
+}
+#sky.is-grabbing{ cursor:grabbing; }
+#sky.is-over{ cursor:pointer; }
+html.fallback #sky{ display:none; }
+
+/* scrims: keep HUD text legible over bright starfield without drawing boxes */
+.scrim{ position:fixed; left:0; right:0; height:180px; pointer-events:none; z-index:1; }
+.scrim.top{ top:0;    background:linear-gradient(to bottom, rgba(4,5,10,.92), rgba(4,5,10,0)); }
+.scrim.bot{ bottom:0; background:linear-gradient(to top,    rgba(4,5,10,.92), rgba(4,5,10,0)); }
+
+/* ===========================================================================
+   HUD — frameless. Hairline rules, negative space, no panels-as-boxes.
+   =========================================================================== */
+.hud{
+  position:fixed; inset:0; z-index:3;
+  display:flex; flex-direction:column; justify-content:space-between;
+  padding:var(--pad);
+  padding-right:calc(var(--pad) + var(--rail));
+  gap:12px;
+  pointer-events:none;
+  transition:padding-right var(--t-mid) var(--ease);
+}
+/* the inspector is an opaque rail; the HUD steps aside rather than hiding under it */
+@media (min-width: 860px){
+  html.inspecting{ --rail: min(360px, 92vw); }
+}
+.hud-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:clamp(12px,3vw,48px); }
+.hud-row > *{ pointer-events:auto; }
+
+/* --- buttons: text + hairline, never a filled chip ---------------------- */
+button, .btn{
+  font:inherit; color:var(--ink-dim);
+  background:none; border:0; padding:0; margin:0;
+  cursor:pointer;
+  font-size:var(--micro); letter-spacing:var(--track); text-transform:uppercase;
+  transition:color var(--t-fast) var(--ease);
+}
+button:hover, .btn:hover{ color:var(--ink); }
+button[disabled]{ opacity:.4; cursor:not-allowed; }
+button[disabled]:hover{ color:var(--ink-dim); }
+
+.rule-btn{
+  border:1px solid var(--hair);
+  padding:.5em .95em;
+  border-radius:1px;
+  transition:border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rule-btn:hover{ border-color:var(--ink-dim); }
+.rule-btn[aria-pressed="true"]{ border-color:var(--accent); color:var(--accent); }
+
+:focus-visible{
+  outline:1px solid var(--accent);
+  outline-offset:3px;
+}
+
+/* --- top-left: lab link + breadcrumb ------------------------------------ */
+.nav-left{ display:flex; flex-direction:column; gap:10px; min-width:0; }
+.lab-back{
+  color:var(--ink-dim); text-decoration:none;
+  font-size:var(--micro); letter-spacing:var(--track); text-transform:uppercase;
+  display:inline-flex; align-items:center; gap:.6em; width:max-content;
+  transition:color var(--t-fast) var(--ease);
+}
+.lab-back::before{ content:''; width:16px; height:1px; background:currentColor; }
+.lab-back:hover{ color:var(--accent); }
+
+.crumbs{ display:flex; align-items:center; gap:.55em; flex-wrap:wrap; min-width:0; }
+.crumbs .sep{ color:var(--hair); font-size:var(--micro); }
+.crumbs button{ max-width:44vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.crumbs button[aria-current="true"]{ color:var(--ink); }
+
+.wordmark{
+  font-size:var(--micro); letter-spacing:.42em; text-transform:uppercase;
+  color:var(--ink); font-weight:600;
+}
+
+/* --- top-right: readout ------------------------------------------------- */
+.readout{ display:grid; gap:0; text-align:right; min-width:150px; }
+.readout .r{
+  display:flex; justify-content:flex-end; align-items:baseline; gap:.9em;
+  padding:.34em 0;
+  border-bottom:1px solid var(--hair-soft);
+}
+.readout .r:last-child{ border-bottom:0; }
+.readout .val strong{ font-weight:600; }
+.readout .val.warn{ color:var(--danger); }
+
+/* --- bottom-left: centre of mass --------------------------------------- */
+.com{ max-width:min(560px, 62vw); display:flex; flex-direction:column; gap:.45em; }
+.com .lbl{ display:flex; align-items:center; gap:.7em; }
+.com .lbl::after{ content:''; flex:1; height:1px; background:var(--hair-soft); }
+.com-verdict{ font-size:var(--lede); line-height:1.2; letter-spacing:-.01em; color:var(--ink); font-weight:400; }
+.com-verdict em{ font-style:normal; color:var(--accent); }
+.com-sub{ font-size:var(--small); color:var(--ink-dim); }
+.com-actions{ display:flex; gap:1.2em; align-items:center; margin-top:.35em; }
+
+/* --- bottom-right: tools ------------------------------------------------ */
+.tools{ display:flex; align-items:center; gap:clamp(10px,1.4vw,18px); flex-wrap:wrap; justify-content:flex-end; }
+.zoomer{ display:flex; align-items:center; gap:.55em; border:1px solid var(--hair); padding:.3em .5em; }
+.zoomer button{ width:1.6em; text-align:center; font-size:var(--small); }
+.zoomer .lbl{ font-variant-numeric:tabular-nums; min-width:3.2em; text-align:center; }
+
+/* ===========================================================================
+   Legend
+   =========================================================================== */
+.legend{
+  position:fixed; z-index:4; right:var(--pad); bottom:calc(var(--pad) + 46px);
+  width:min(320px, calc(100vw - 2*var(--pad)));
+  display:grid; gap:.1em;
+  background:linear-gradient(to left, rgba(4,5,10,.94), rgba(4,5,10,.82));
+  padding:14px 16px;
+  border-left:1px solid var(--hair);
+}
+.legend[hidden]{ display:none; }
+.legend .row{ display:flex; justify-content:space-between; gap:1.2em; padding:.35em 0; border-bottom:1px solid var(--hair-soft); }
+.legend .row:last-child{ border-bottom:0; }
+.legend .row span:last-child{ color:var(--ink); font-size:var(--small); text-align:right; }
+
+/* ===========================================================================
+   Quick-add
+   =========================================================================== */
+.quick{
+  position:fixed; z-index:6; left:50%; top:clamp(78px, 14vh, 150px);
+  transform:translateX(-50%);
+  width:min(660px, calc(100vw - 2*var(--pad)));
+  background:linear-gradient(to bottom, rgba(4,5,10,.96), rgba(4,5,10,.86));
+  padding:6px 0 10px;
+}
+.quick[hidden]{ display:none; }
+.quick label{ display:block; margin-bottom:.5em; }
+.quick input{
+  width:100%;
+  font:inherit; font-size:var(--lede);
+  color:var(--ink); background:transparent;
+  border:0; border-bottom:1px solid var(--hair);
+  padding:.35em 0 .5em;
+  outline:none;
+}
+.quick input:focus{ border-bottom-color:var(--accent); }
+.quick input::placeholder{ color:#68738c; }
+.quick .preview{ display:flex; flex-wrap:wrap; gap:.35em 1.1em; margin-top:.8em; min-height:1.4em; }
+.quick .preview span{ font-size:var(--micro); letter-spacing:.1em; text-transform:uppercase; color:var(--ink-dim); }
+.quick .preview b{ color:var(--accent); font-weight:500; }
+.quick .hint{ margin:.9em 0 0; font-size:var(--micro); letter-spacing:.08em; color:var(--ink-quiet); }
+.quick .hint code{ color:var(--ink-dim); font-family:inherit; }
+
+/* ===========================================================================
+   Inspector (TASK level)
+   =========================================================================== */
+.inspector{
+  position:fixed; z-index:5; right:0; top:0; bottom:0;
+  width:min(360px, 92vw);
+  padding:calc(var(--pad) + 44px) var(--pad) var(--pad);
+  overflow-y:auto; overscroll-behavior:contain;
+  background:linear-gradient(to left, rgba(4,5,10,.95) 40%, rgba(4,5,10,.55));
+  border-left:1px solid var(--hair);
+  display:flex; flex-direction:column; gap:1.05em;
+}
+.inspector[hidden]{ display:none; }
+.insp-head{ display:flex; flex-direction:column; gap:.4em; }
+.insp-project{ display:flex; align-items:center; gap:.6em; }
+.insp-dot{ width:8px; height:8px; border-radius:50%; flex:none; }
+.field{ display:flex; flex-direction:column; gap:.45em; }
+.field > .lbl{ display:flex; align-items:center; gap:.7em; }
+.field > .lbl::after{ content:''; flex:1; height:1px; background:var(--hair-soft); }
+.field input[type="text"],
+.field input[type="date"],
+.field input[type="number"],
+.field select{
+  font:inherit; font-size:var(--body);
+  color:var(--ink); background:transparent;
+  border:0; border-bottom:1px solid var(--hair);
+  padding:.35em 0; width:100%;
+  border-radius:0;
+}
+.field input:focus, .field select:focus{ outline:none; border-bottom-color:var(--accent); }
+.seg{ display:flex; gap:.4em; flex-wrap:wrap; }
+.seg button{ flex:1 1 auto; min-width:4.6em; }
+.meters{ display:grid; gap:.55em; }
+.meter{ display:grid; gap:.3em; }
+.meter .top{ display:flex; justify-content:space-between; gap:1em; }
+.bar{ height:2px; background:var(--hair-soft); position:relative; overflow:hidden; }
+.bar i{ position:absolute; inset:0 auto 0 0; background:var(--accent); transform-origin:left center; transform:scaleX(0); transition:transform var(--t-mid) var(--ease); }
+.bar.hot i{ background:var(--danger); }
+.why{ font-size:var(--small); color:var(--ink-dim); }
+.danger-btn{ color:var(--danger); border-color:rgba(255,85,104,.4); }
+.danger-btn:hover{ color:#ff8a97; border-color:var(--danger); }
+
+/* ===========================================================================
+   Body manifest — the keyboard/screen-reader mirror of the canvas.
+   Clipped until something inside it takes focus, then it becomes a real,
+   visible, focus-ringed list. Mouse users never see it; keyboard users get
+   a genuine target instead of an invisible tab stop.
+   =========================================================================== */
+.manifest{
+  position:fixed; z-index:7; left:var(--pad); top:50%;
+  transform:translateY(-50%);
+  width:min(340px, calc(100vw - 2*var(--pad)));
+  max-height:70vh; overflow-y:auto; overscroll-behavior:contain;
+  clip-path:inset(50%);
+  background:linear-gradient(to right, rgba(4,5,10,.96), rgba(4,5,10,.86));
+  border-left:1px solid var(--accent);
+  padding:12px 14px;
+}
+.manifest:focus-within{ clip-path:none; }
+html.fallback .manifest{
+  clip-path:none; position:static; transform:none;
+  width:auto; max-height:none; margin:96px var(--pad) var(--pad);
+  border-left:1px solid var(--hair);
+}
+html.fallback body{ overflow:auto; }
+.manifest h2{ margin:0 0 .7em; font-size:var(--micro); letter-spacing:var(--track); text-transform:uppercase; color:var(--ink-dim); font-weight:500; }
+.manifest ul{ list-style:none; margin:0; padding:0; }
+.manifest li{ border-bottom:1px solid var(--hair-soft); }
+.manifest li:last-child{ border-bottom:0; }
+.manifest .item{
+  display:flex; align-items:baseline; gap:.7em; width:100%;
+  text-align:left; padding:.5em 0;
+  text-transform:none; letter-spacing:0; font-size:var(--small);
+  color:var(--ink-dim);
+}
+.manifest .item:hover{ color:var(--ink); }
+.manifest .item .t{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.manifest .item .m{ font-size:var(--micro); letter-spacing:.1em; text-transform:uppercase; color:var(--ink-quiet); white-space:nowrap; }
+.manifest .item .pip{ width:6px; height:6px; border-radius:50%; flex:none; align-self:center; }
+.manifest .keys{ margin:.8em 0 0; font-size:var(--micro); letter-spacing:.08em; color:var(--ink-quiet); }
+
+/* --- screen-reader-only ------------------------------------------------- */
+.sr{
+  position:absolute; width:1px; height:1px; margin:-1px; padding:0;
+  overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
+}
+
+/* --- empty / error notice ---------------------------------------------- */
+.notice{
+  position:fixed; inset:auto 0 auto 0; top:50%; transform:translateY(-50%);
+  z-index:2; text-align:center; padding:0 var(--pad);
+  color:var(--ink-dim); font-size:var(--small);
+  letter-spacing:var(--track); text-transform:uppercase;
+  pointer-events:none;
+}
+.notice[hidden]{ display:none; }
+
+/* ===========================================================================
+   Narrow viewports — inspector becomes a bottom sheet, HUD compresses.
+   =========================================================================== */
+@media (max-width: 859px){
+  .inspector{
+    top:auto; left:0; right:0; width:auto;
+    max-height:56vh;
+    padding:var(--pad);
+    border-left:0; border-top:1px solid var(--hair);
+    background:linear-gradient(to top, rgba(4,5,10,.97) 60%, rgba(4,5,10,.8));
+  }
+  html.inspecting .com{ display:none; }
+  html.inspecting .scrim.bot{ opacity:0; }
+  .com{ max-width:100%; }
+  .readout{ min-width:0; }
+  .legend{ bottom:auto; top:calc(var(--pad) + 74px); }
+}
+@media (max-width: 520px){
+  .hud-row{ gap:10px; }
+  .readout .r{ padding:.25em 0; }
+  .com-verdict{ font-size:clamp(14px,4.2vw,17px); }
+  .manifest{ left:0; right:0; width:auto; top:auto; bottom:0; transform:none; max-height:62vh; border-left:0; border-top:1px solid var(--accent); }
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{ animation:none !important; transition-duration:1ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="scrim top" aria-hidden="true"></div>
+<div class="scrim bot" aria-hidden="true"></div>
+
+<!-- The canvas is a rendering of the manifest below; the manifest carries the
+     semantics, so the canvas itself is hidden from assistive tech. -->
+<canvas id="sky" aria-hidden="true"></canvas>
+
+<p class="notice" id="notice" hidden></p>
+
+<main class="hud">
+  <div class="hud-row">
+    <div class="nav-left">
+      <a class="lab-back" href="./index.html">Lab</a>
+      <nav class="crumbs" id="crumbs" aria-label="Zoom level"></nav>
+    </div>
+    <div class="readout" id="readout" aria-label="System readout"></div>
+  </div>
+
+  <div class="hud-row">
+    <section class="com" aria-labelledby="com-label">
+      <h1 class="lbl" id="com-label">Centre of mass</h1>
+      <p class="com-verdict" id="com-verdict">—</p>
+      <p class="com-sub" id="com-sub"></p>
+      <div class="com-actions">
+        <button type="button" class="rule-btn" id="pull">Pull ⟶</button>
+        <button type="button" id="btn-new">+ New body</button>
+      </div>
+    </section>
+
+    <div class="tools">
+      <div class="zoomer">
+        <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+        <span class="lbl" id="zoom-val">1.00×</span>
+        <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+      </div>
+      <button type="button" id="btn-legend" aria-expanded="false" aria-controls="legend">Legend</button>
+      <button type="button" id="btn-reset">Reset data</button>
+    </div>
+  </div>
+</main>
+
+<section class="legend" id="legend" hidden aria-label="How to read the field">
+  <div class="row"><span class="lbl">Orbit radius</span><span>Time until due</span></div>
+  <div class="row"><span class="lbl">Orbit speed</span><span>Urgency</span></div>
+  <div class="row"><span class="lbl">Body size</span><span>Priority</span></div>
+  <div class="row"><span class="lbl">Fading / grey</span><span>Untouched, going stale</span></div>
+  <div class="row"><span class="lbl">Red + tail</span><span>Overdue</span></div>
+  <div class="row"><span class="lbl">Halo ring</span><span>In progress</span></div>
+  <div class="row"><span class="lbl">Outer belt</span><span>Done — accumulated mass</span></div>
+  <div class="row"><span class="lbl">Star brightness</span><span>Project health</span></div>
+</section>
+
+<div class="quick" id="quick" hidden>
+  <label class="lbl" for="quick-input">New body — natural language</label>
+  <input id="quick-input" type="text" autocomplete="off" spellcheck="false"
+         placeholder="mock exam #2 !high @fri ~4h /ceh *deep">
+  <div class="preview" id="quick-preview"></div>
+  <p class="hint"><code>!high</code> priority · <code>@fri</code> due · <code>#tag</code> · <code>~4h</code> estimate · <code>/project</code> · <code>*deep</code> energy — Enter to launch, Esc to cancel</p>
+</div>
+
+<aside class="inspector" id="inspector" hidden aria-label="Task detail">
+  <div class="insp-head">
+    <div class="insp-project"><span class="insp-dot" id="insp-dot"></span><span class="lbl" id="insp-project"></span></div>
+  </div>
+
+  <div class="field">
+    <label class="lbl" for="f-title">Designation</label>
+    <input type="text" id="f-title">
+  </div>
+
+  <div class="field">
+    <span class="lbl" id="l-status">Orbit shell</span>
+    <div class="seg" role="group" aria-labelledby="l-status" id="seg-status"></div>
+  </div>
+
+  <div class="field">
+    <span class="lbl" id="l-prio">Priority</span>
+    <div class="seg" role="group" aria-labelledby="l-prio" id="seg-prio"></div>
+  </div>
+
+  <div class="field">
+    <label class="lbl" for="f-due">Due</label>
+    <input type="date" id="f-due">
+  </div>
+
+  <div class="field">
+    <label class="lbl" for="f-est">Estimate — hours</label>
+    <input type="number" id="f-est" min="0" step="0.5">
+  </div>
+
+  <div class="field">
+    <label class="lbl" for="f-energy">Energy</label>
+    <select id="f-energy">
+      <option value="deep">Deep</option>
+      <option value="shallow">Shallow</option>
+      <option value="admin">Admin</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <span class="lbl">Forces</span>
+    <div class="meters">
+      <div class="meter"><div class="top"><span class="lbl">Urgency</span><span class="val" id="m-urg-v"></span></div><div class="bar hot" id="m-urg"><i></i></div></div>
+      <div class="meter"><div class="top"><span class="lbl">Staleness</span><span class="val" id="m-stale-v"></span></div><div class="bar" id="m-stale"><i></i></div></div>
+      <div class="meter"><div class="top"><span class="lbl">Mass — score</span><span class="val" id="m-score-v"></span></div><div class="bar" id="m-score"><i></i></div></div>
+    </div>
+    <p class="why" id="insp-why"></p>
+  </div>
+
+  <div class="field">
+    <span class="lbl">Tags</span>
+    <p class="why" id="insp-tags"></p>
+  </div>
+
+  <div class="seg">
+    <button type="button" class="rule-btn danger-btn" id="f-delete">Delete body</button>
+  </div>
+</aside>
+
+<section class="manifest" id="manifest" aria-label="Body manifest">
+  <h2 id="manifest-h">Manifest</h2>
+  <ul id="manifest-list"></ul>
+  <p class="keys">Enter select · [ ] shell · Del remove · Esc up</p>
+</section>
+
+<p class="sr" id="live" role="status" aria-live="polite"></p>
+
+<script src="_kernel.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PT = window.PT;
+  var noticeEl = document.getElementById('notice');
+  if (!PT) {
+    noticeEl.hidden = false;
+    noticeEl.textContent = 'Kernel not found — _kernel.js must sit beside this file.';
+    return;
+  }
+
+  /* ==========================================================================
+     Constants. World units, not pixels — the camera converts.
+     ========================================================================== */
+  var TAU = Math.PI * 2;
+  var SQUASH = 0.46;              // we look at the orbital plane from above-ish
+
+  // Status shells, measured outward from the star's surface. The shells are
+  // the drop targets; urgency positions a body *within* its shell.
+  var BAND = {
+    doing: [70, 108],
+    todo:  [128, 215],
+    done:  [242, 258]
+  };
+  var SHELLS = ['doing', 'todo', 'done'];
+  var STATUS_ORDER = ['todo', 'doing', 'done'];
+  var PRIO_R = { high: 7.5, medium: 5.4, low: 3.8 };
+  var MAX_R = BAND.done[1];
+
+  var reduced = PT.reducedMotion();
+
+  /* ==========================================================================
+     Small helpers
+     ========================================================================== */
+  function hash01(s) {
+    var h = 2166136261, i;
+    for (i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 100000) / 100000;
+  }
+  function hexRgb(hex) {
+    var h = String(hex || '#ffffff').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  function mix(a, b, t) {
+    return { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t };
+  }
+  function rgba(c, a) {
+    return 'rgba(' + (c.r | 0) + ',' + (c.g | 0) + ',' + (c.b | 0) + ',' + a + ')';
+  }
+  var GREY = { r: 118, g: 126, b: 148 };
+  var RED = hexRgb('#ff5568');
+  var WHITE = { r: 255, g: 255, b: 255 };
+
+  function toDateInput(ts) {
+    if (ts == null) return '';
+    var d = new Date(ts);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+  function fromDateInput(v) {
+    if (!v) return null;
+    var p = v.split('-');
+    if (p.length !== 3) return null;
+    var d = new Date(+p[0], +p[1] - 1, +p[2], 17, 0, 0, 0);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  var liveEl = document.getElementById('live');
+  function announce(msg) { liveEl.textContent = msg; }
+
+  /* ==========================================================================
+     Canvas. If 2D is unavailable we drop to the manifest list, which already
+     carries the whole dataset.
+     ========================================================================== */
+  var canvas = document.getElementById('sky');
+  var ctx = null;
+  try { ctx = canvas.getContext('2d'); } catch (e) { ctx = null; }
+  if (!ctx) {
+    document.documentElement.classList.add('fallback');
+    noticeEl.hidden = false;
+    noticeEl.textContent = 'Canvas unavailable — showing the manifest instead.';
+  }
+
+  var vw = 1, vh = 1, dpr = 1;
+
+  function resize() {
+    vw = Math.max(1, window.innerWidth);
+    vh = Math.max(1, window.innerHeight);
+    dpr = Math.min(1.5, window.devicePixelRatio || 1);   // capped: glow is fill-rate bound
+    document.documentElement.classList.toggle('narrow', vw < 860);
+    if (ctx) {
+      canvas.width = Math.round(vw * dpr);
+      canvas.height = Math.round(vh * dpr);
+      canvas.style.width = vw + 'px';
+      canvas.style.height = vh + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    buildStarfield();
+    buildNebula();
+    layout();
+    snapCamera();
+    requestDraw();
+  }
+
+  /* ==========================================================================
+     Glow sprites — one 128px radial gradient per colour, drawn additively and
+     scaled. Re-creating gradients every frame for 40 bodies is the single
+     easiest way to lose 60fps here, so they are cached.
+     ========================================================================== */
+  var glowCache = Object.create(null);
+  function glowSprite(key, c) {
+    if (glowCache[key]) return glowCache[key];
+    var S = 128;
+    var cv = document.createElement('canvas');
+    cv.width = cv.height = S;
+    var g = cv.getContext('2d');
+    var grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    grd.addColorStop(0.00, rgba(c, 1));
+    grd.addColorStop(0.14, rgba(c, 0.62));
+    grd.addColorStop(0.36, rgba(c, 0.16));
+    grd.addColorStop(0.70, rgba(c, 0.03));
+    grd.addColorStop(1.00, rgba(c, 0));
+    g.fillStyle = grd;
+    g.fillRect(0, 0, S, S);
+    glowCache[key] = cv;
+    return cv;
+  }
+  function drawGlow(key, c, x, y, radius, alpha) {
+    if (alpha <= 0.004 || radius <= 0) return;
+    var sp = glowSprite(key, c);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(sp, x - radius, y - radius, radius * 2, radius * 2);
+    ctx.globalAlpha = 1;
+  }
+
+  /* ==========================================================================
+     Starfield — three pre-rendered tiles at different sizes and parallax
+     depths, tiled across the screen. Different tile sizes stop the repeat
+     from ever lining up visibly.
+     ========================================================================== */
+  var LAYERS = [
+    { size: 487, count: 26, depth: 0.22, maxA: 0.34, big: 2 },
+    { size: 613, count: 22, depth: 0.48, maxA: 0.55, big: 3 },
+    { size: 761, count: 16, depth: 0.82, maxA: 0.85, big: 4 }
+  ];
+  function buildStarfield() {
+    for (var i = 0; i < LAYERS.length; i++) {
+      var L = LAYERS[i];
+      var cv = document.createElement('canvas');
+      var S = Math.round(L.size * dpr);
+      cv.width = cv.height = S;
+      var g = cv.getContext('2d');
+      g.scale(dpr, dpr);
+      var seed = 1000 + i * 977;
+      for (var k = 0; k < L.count; k++) {
+        var rx = hash01('x' + seed + k) * L.size;
+        var ry = hash01('y' + seed + k) * L.size;
+        var a = 0.12 + hash01('a' + seed + k) * L.maxA;
+        var bright = k < L.big;
+        var r = bright ? 1.25 : 0.65;
+        g.fillStyle = 'rgba(214,228,255,' + a.toFixed(3) + ')';
+        g.beginPath(); g.arc(rx, ry, r, 0, TAU); g.fill();
+        if (bright) {
+          // hand-drawn flare: two hairlines, no bloom filter
+          g.strokeStyle = 'rgba(214,228,255,' + (a * 0.34).toFixed(3) + ')';
+          g.lineWidth = 0.7;
+          g.beginPath();
+          g.moveTo(rx - 4.5, ry); g.lineTo(rx + 4.5, ry);
+          g.moveTo(rx, ry - 4.5); g.lineTo(rx, ry + 4.5);
+          g.stroke();
+        }
+      }
+      L.tile = cv;
+    }
+  }
+  function drawStarfield() {
+    for (var i = 0; i < LAYERS.length; i++) {
+      var L = LAYERS[i];
+      if (!L.tile) continue;
+      var f = reduced ? 1 : L.depth;                 // no differential parallax when reduced
+      var S = L.size;
+      var ox = -(cam.x * cam.z * f) % S; if (ox > 0) ox -= S;
+      var oy = -(cam.y * cam.z * f * SQUASH) % S; if (oy > 0) oy -= S;
+      for (var x = ox; x < vw; x += S) {
+        for (var y = oy; y < vh; y += S) {
+          ctx.drawImage(L.tile, x, y, S, S);
+        }
+      }
+    }
+  }
+
+  /* Nebula: two enormous soft washes, pre-rendered at quarter res. Cheap depth
+     without a shader. */
+  var nebula = null;
+  function buildNebula() {
+    var W = Math.max(64, Math.round(vw / 4)), H = Math.max(64, Math.round(vh / 4));
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var g = cv.getContext('2d');
+    var blobs = [
+      { x: 0.22, y: 0.28, r: 0.72, c: '124,92,255', a: 0.15 },
+      { x: 0.82, y: 0.74, r: 0.66, c: '34,150,190', a: 0.12 },
+      { x: 0.58, y: 0.10, r: 0.48, c: '244,63,94', a: 0.055 }
+    ];
+    g.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < blobs.length; i++) {
+      var b = blobs[i];
+      var R = b.r * Math.max(W, H);
+      var grd = g.createRadialGradient(b.x * W, b.y * H, 0, b.x * W, b.y * H, R);
+      grd.addColorStop(0, 'rgba(' + b.c + ',' + b.a + ')');
+      grd.addColorStop(1, 'rgba(' + b.c + ',0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+    }
+    nebula = cv;
+  }
+
+  /* ==========================================================================
+     MODEL — stars and bodies, rebuilt from the kernel on every change.
+     Angles and eased radii survive rebuilds so a mutation never teleports the
+     field.
+     ========================================================================== */
+  var stars = [];               // { id, name, color, x, y, r, health, counts }
+  var starById = Object.create(null);
+  var bodies = [];              // { id, projectId, angle, w, rCur, rTarget, ... }
+  var bodyById = Object.create(null);
+  var keptAngles = Object.create(null);
+  var keptRadii = Object.create(null);
+  var bounds = { x: 0, y: 0, w: 1200, h: 800 };
+
+  function starRadius(count) { return 11 + Math.sqrt(Math.max(count, 1)) * 2.6; }
+
+  function layout() {
+    var ps = PT.projects();
+    var portrait = vw / vh < 0.95;
+    var n = ps.length;
+    var placed = [];
+    var i;
+
+    if (n === 0) { placed = []; }
+    else if (n === 1) { placed = [{ x: 0, y: 0 }]; }
+    else if (portrait || n === 2) {
+      var cols = Math.min(2, n);
+      var rows = Math.ceil(n / cols);
+      for (i = 0; i < n; i++) {
+        placed.push({
+          x: ((i % cols) - (cols - 1) / 2) * 640,
+          y: (Math.floor(i / cols) - (rows - 1) / 2) * 540
+        });
+      }
+    } else {
+      var R = 520;
+      for (i = 0; i < n; i++) {
+        var a = -Math.PI / 2 + (i / n) * TAU;
+        placed.push({ x: Math.cos(a) * R, y: Math.sin(a) * R * 0.62 });
+      }
+    }
+
+    stars = [];
+    starById = Object.create(null);
+    var minX = 0, maxX = 0, minY = 0, maxY = 0, first = true;
+
+    for (i = 0; i < ps.length; i++) {
+      var p = ps[i];
+      var all = PT.tasks({ project: p.id });
+      var open = 0, overdue = 0, doing = 0, now = Date.now();
+      for (var k = 0; k < all.length; k++) {
+        var t = all[k];
+        if (t.status !== 'done') { open++; if (t.due && t.due < now) overdue++; }
+        if (t.status === 'doing') doing++;
+      }
+      var s = {
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        rgb: hexRgb(p.color),
+        glyph: p.glyph,
+        x: placed[i].x, y: placed[i].y,
+        r: starRadius(all.length),
+        health: PT.health(p.id),
+        total: all.length, open: open, overdue: overdue, doing: doing,
+        phase: hash01(p.id) * TAU
+      };
+      stars.push(s);
+      starById[p.id] = s;
+
+      var foot = s.r + MAX_R;
+      var x0 = s.x - foot, x1 = s.x + foot;
+      var y0 = s.y - foot * SQUASH - 34, y1 = s.y + foot * SQUASH + 34;
+      if (first) { minX = x0; maxX = x1; minY = y0; maxY = y1; first = false; }
+      else { minX = Math.min(minX, x0); maxX = Math.max(maxX, x1); minY = Math.min(minY, y0); maxY = Math.max(maxY, y1); }
+    }
+
+    if (first) { minX = -400; maxX = 400; minY = -300; maxY = 300; }
+    bounds = { x: (minX + maxX) / 2, y: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY };
+  }
+
+  function targetRadius(t, star) {
+    var b = BAND[t.status] || BAND.todo;
+    if (t.status === 'done') return star.r + b[0] + hash01(t.id) * (b[1] - b[0]);
+    // urgency pulls a body toward the inner edge of its own shell
+    var u = PT.clamp(PT.urgency(t), 0, 1);
+    return star.r + b[1] - (b[1] - b[0]) * u;
+  }
+
+  function rebuild() {
+    var i;
+    for (i = 0; i < bodies.length; i++) {
+      keptAngles[bodies[i].id] = bodies[i].angle;
+      keptRadii[bodies[i].id] = bodies[i].rCur;
+    }
+    layout();
+
+    var list = PT.tasks({});
+    bodies = [];
+    bodyById = Object.create(null);
+    var now = Date.now();
+
+    for (i = 0; i < list.length; i++) {
+      var t = list[i];
+      var star = starById[t.projectId];
+      if (!star) continue;                      // orphan task, project gone
+      var u = PT.clamp(PT.urgency(t), 0, 1);
+      var stale = PT.clamp(PT.staleness(t), 0, 1);
+      var overdue = t.status !== 'done' && !!t.due && t.due < now;
+      var rT = targetRadius(t, star);
+      var isNew = !(t.id in keptRadii);
+
+      var base = t.status === 'done' ? 0.018 : 0.10 + u * 0.55;
+      var b = {
+        id: t.id,
+        task: t,
+        projectId: t.projectId,
+        star: star,
+        angle: keptAngles[t.id] != null ? keptAngles[t.id] : hash01(t.id) * TAU,
+        // entry choreography: a fresh body falls inward from beyond the belt
+        rCur: isNew ? (reduced ? rT : rT * 2.6) : keptRadii[t.id],
+        rTarget: rT,
+        w: base * (120 / Math.max(40, rT)),
+        size: PRIO_R[t.priority] || 5,
+        overdue: overdue,
+        stale: stale,
+        urgency: u,
+        born: isNew ? now : 0,
+        phase: hash01('ph' + t.id) * TAU
+      };
+      bodies.push(b);
+      bodyById[t.id] = b;
+    }
+
+    // ids that vanished shouldn't leak memory across long sessions
+    keptAngles = Object.create(null);
+    keptRadii = Object.create(null);
+
+    // A selection can be deleted out from under us.
+    if (view.taskId && !bodyById[view.taskId]) {
+      view.taskId = null;
+      if (view.level === 'task') view.level = view.projectId ? 'project' : 'system';
+    }
+    if (view.projectId && !starById[view.projectId]) {
+      view.projectId = null;
+      if (view.level !== 'system') view.level = 'system';
+    }
+    if (focusId && !bodyById[focusId] && !starById[focusId]) focusId = null;
+  }
+
+  /* ==========================================================================
+     VIEW / CAMERA
+     ========================================================================== */
+  var view = { level: 'system', projectId: null, taskId: null };
+  var cam = { x: 0, y: 0, z: 1 };
+  var userZoom = 1;
+  var pan = { x: 0, y: 0 };
+  var hoverId = null;
+  var focusId = null;
+
+  function viewCenter() {
+    var cx = vw / 2, cy = vh / 2;
+    var inspecting = view.level === 'task';
+    if (inspecting) {
+      if (vw >= 860) cx = (vw - Math.min(360, vw * 0.92)) / 2;
+      else cy = vh * 0.30;
+    }
+    return { x: cx, y: cy };
+  }
+
+  function fitZoom() {
+    // 0.94 / 0.78 leave room for HUD rows top and bottom
+    var zx = (vw * 0.94) / Math.max(1, bounds.w);
+    var zy = (vh * 0.78) / Math.max(1, bounds.h);
+    return PT.clamp(Math.min(zx, zy), 0.14, 1.5);
+  }
+  function projectZoom() {
+    var span = 2 * (MAX_R + 60);
+    var zx = (vw * 0.9) / span;
+    var zy = (vh * 0.82) / (span * SQUASH + 190);
+    return PT.clamp(Math.min(zx, zy), 0.42, 2.4);
+  }
+
+  function camTarget() {
+    var z, tx, ty;
+    if (view.level === 'system' || !view.projectId || !starById[view.projectId]) {
+      z = fitZoom(); tx = bounds.x; ty = bounds.y;
+    } else if (view.level === 'project') {
+      var s = starById[view.projectId];
+      z = projectZoom(); tx = s.x; ty = s.y;
+    } else {
+      var b = bodyById[view.taskId];
+      var st = starById[view.projectId];
+      z = projectZoom() * 2.3;
+      if (b) { var p = bodyPos(b); tx = p.x; ty = p.y; }
+      else { tx = st.x; ty = st.y; }
+    }
+    return { x: tx + pan.x, y: ty + pan.y, z: z * userZoom };
+  }
+  function snapCamera() { var t = camTarget(); cam.x = t.x; cam.y = t.y; cam.z = t.z; }
+
+  function w2s(wx, wy) {
+    var c = viewCenter();
+    return { x: c.x + (wx - cam.x) * cam.z, y: c.y + (wy - cam.y) * cam.z * 1 };
+  }
+  function s2w(sx, sy) {
+    var c = viewCenter();
+    return { x: cam.x + (sx - c.x) / cam.z, y: cam.y + (sy - c.y) / cam.z };
+  }
+  function bodyPos(b) {
+    var r = b.rCur + (b.wobble || 0);
+    return { x: b.star.x + Math.cos(b.angle) * r, y: b.star.y + Math.sin(b.angle) * r * SQUASH };
+  }
+
+  /* ==========================================================================
+     SIGNATURE — centre of mass.
+     Weighted centroid of every open body, mass = PT.score(task). Recomputed
+     each frame so it genuinely drifts as bodies swing round their stars.
+     ========================================================================== */
+  var com = { x: 0, y: 0, mass: 0, has: false };
+  function computeCOM() {
+    var scope = view.level === 'system' ? null : view.projectId;
+    var sx = 0, sy = 0, m = 0;
+    for (var i = 0; i < bodies.length; i++) {
+      var b = bodies[i];
+      if (b.task.status === 'done') continue;
+      if (scope && b.projectId !== scope) continue;
+      var mass = Math.max(0.05, PT.score(b.task));
+      var p = bodyPos(b);
+      sx += p.x * mass; sy += p.y * mass; m += mass;
+    }
+    if (m <= 0) { com.has = false; com.mass = 0; return; }
+    com.has = true; com.mass = m;
+    com.x = sx / m; com.y = sy / m;
+  }
+
+  /** Which project the gravity actually points at, and by how much. */
+  function gravityVerdict() {
+    var byProject = Object.create(null);
+    var total = 0, i;
+    for (i = 0; i < bodies.length; i++) {
+      var b = bodies[i];
+      if (b.task.status === 'done') continue;
+      var m = Math.max(0.05, PT.score(b.task));
+      byProject[b.projectId] = (byProject[b.projectId] || 0) + m;
+      total += m;
+    }
+    var topId = null, topM = -1;
+    for (var k in byProject) if (byProject[k] > topM) { topM = byProject[k]; topId = k; }
+    return {
+      total: total,
+      projectId: topId,
+      project: topId ? starById[topId] : null,
+      share: total > 0 ? topM / total : 0
+    };
+  }
+
+  /* ==========================================================================
+     SIMULATION
+     ========================================================================== */
+  var lastT = 0;
+  var clockT = 0;
+
+  function step(dt) {
+    clockT += dt;
+    var i, b;
+
+    for (i = 0; i < bodies.length; i++) {
+      b = bodies[i];
+
+      // settle into the shell its status demands
+      if (reduced) b.rCur = b.rTarget;
+      else {
+        var k = 1 - Math.exp(-dt * 3.4);
+        b.rCur += (b.rTarget - b.rCur) * k;
+      }
+
+      if (!reduced) {
+        // the focused task holds still so the camera can match orbit with it
+        var hold = (view.level === 'task' && b.id === view.taskId) ? 0.12 : 1;
+        b.angle += b.w * dt * hold;
+        if (b.angle > TAU) b.angle -= TAU;
+        b.wobble = b.overdue ? Math.sin(clockT * 3.4 + b.phase) * 3.4 : 0;
+      } else {
+        b.wobble = 0;
+      }
+    }
+
+    computeCOM();
+
+    var t = camTarget();
+    if (reduced) { cam.x = t.x; cam.y = t.y; cam.z = t.z; }
+    else {
+      var ck = 1 - Math.exp(-dt * 3.6);
+      cam.x += (t.x - cam.x) * ck;
+      cam.y += (t.y - cam.y) * ck;
+      cam.z += (t.z - cam.z) * ck;
+    }
+  }
+
+  /* ==========================================================================
+     DRAWING
+     ========================================================================== */
+  function tracked(text, x, y, spacing, align) {
+    var chars = String(text).split('');
+    var total = 0, i;
+    for (i = 0; i < chars.length; i++) total += ctx.measureText(chars[i]).width + spacing;
+    total -= spacing;
+    var sx = align === 'center' ? x - total / 2 : align === 'right' ? x - total : x;
+    for (i = 0; i < chars.length; i++) {
+      ctx.fillText(chars[i], sx, y);
+      sx += ctx.measureText(chars[i]).width + spacing;
+    }
+    return total;
+  }
+
+  function bodyRgb(b) {
+    if (b.task.status !== 'done' && b.overdue) return RED;
+    var base = b.star.rgb;
+    return mix(base, GREY, b.stale * 0.72);
+  }
+  function bodyAlpha(b) {
+    if (b.task.status === 'done') return 0.34;
+    var a = 1 - b.stale * 0.55;
+    if (b.born && !reduced) {
+      var age = (Date.now() - b.born) / 700;
+      if (age < 1) a *= PT.clamp(age, 0, 1);
+    }
+    return a;
+  }
+
+  function starDim(s) {
+    if (view.level === 'system') return 1;
+    return s.id === view.projectId ? 1 : 0.22;
+  }
+
+  function draw() {
+    if (!ctx) return;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#04050a';
+    ctx.fillRect(0, 0, vw, vh);
+
+    if (nebula) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.drawImage(nebula, 0, 0, vw, vh);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    drawStarfield();
+
+    var i, b, s, p, sr;
+
+    /* --- orbit rings (hairline, 8%) ------------------------------------- */
+    ctx.lineWidth = 1;
+    for (i = 0; i < bodies.length; i++) {
+      b = bodies[i];
+      var d = starDim(b.star);
+      if (d < 0.5) continue;
+      var rr = b.rCur * cam.z;
+      if (rr < 6 || rr > 6000) continue;
+      var c0 = w2s(b.star.x, b.star.y);
+      ctx.strokeStyle = 'rgba(180,196,230,' + (0.08 * d * (b.task.status === 'done' ? 0.5 : 1)).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.ellipse(c0.x, c0.y, rr, rr * SQUASH, 0, 0, TAU);
+      ctx.stroke();
+    }
+
+    /* --- status shells, only where you can act on them ------------------ */
+    if (view.level === 'project' && starById[view.projectId]) {
+      s = starById[view.projectId];
+      var c = w2s(s.x, s.y);
+      for (i = 0; i < SHELLS.length; i++) {
+        var name = SHELLS[i];
+        var mid = s.r + (BAND[name][0] + BAND[name][1]) / 2;
+        var active = drag.active && drag.shell === name;
+        var rr2 = mid * cam.z;
+        ctx.strokeStyle = active ? 'rgba(143,227,255,.55)' : 'rgba(180,196,230,.13)';
+        ctx.setLineDash(active ? [] : [2, 7]);
+        ctx.beginPath();
+        ctx.ellipse(c.x, c.y, rr2, rr2 * SQUASH, 0, 0, TAU);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.font = '500 10px ' + getComputedStyle(document.body).fontFamily;
+        ctx.fillStyle = active ? 'rgba(143,227,255,.95)' : 'rgba(158,170,196,.5)';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        tracked(name.toUpperCase(), c.x + rr2 + 8, c.y, 2.2, 'left');
+      }
+    }
+
+    /* --- additive pass: every glow ------------------------------------- */
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (i = 0; i < stars.length; i++) {
+      s = stars[i];
+      p = w2s(s.x, s.y);
+      var dim = starDim(s);
+      // healthy = steady; unhealthy = dim with a slow unstable flicker
+      var flick = reduced ? 0 : (1 - s.health) * (Math.sin(clockT * 2.3 + s.phase) * 0.09 + Math.sin(clockT * 7.1 + s.phase * 2) * 0.05);
+      var bright = (0.42 + s.health * 0.58 + flick) * dim;
+      sr = Math.max(2.2, s.r * cam.z);
+      drawGlow('s' + s.id, s.rgb, p.x, p.y, sr * 7.5, 0.5 * bright);
+      drawGlow('s' + s.id, s.rgb, p.x, p.y, sr * 2.4, 0.55 * bright);
+    }
+
+    for (i = 0; i < bodies.length; i++) {
+      b = bodies[i];
+      var dm = starDim(b.star);
+      if (dm < 0.05) continue;
+      var col = bodyRgb(b);
+      var al = bodyAlpha(b) * dm;
+      p = w2s(b.star.x, b.star.y);
+      var rad = b.rCur + (b.wobble || 0);
+      var bp = { x: b.star.x + Math.cos(b.angle) * rad, y: b.star.y + Math.sin(b.angle) * rad * SQUASH };
+      var sp = w2s(bp.x, bp.y);
+      var brs = Math.max(1.5, b.size * cam.z);
+
+      if (b.overdue) {
+        // comet trail: samples of where it just was, along its own orbit
+        for (var q = 1; q <= 9; q++) {
+          var a2 = b.angle - q * 0.05;
+          var tp = w2s(b.star.x + Math.cos(a2) * rad, b.star.y + Math.sin(a2) * rad * SQUASH);
+          drawGlow('r', RED, tp.x, tp.y, brs * (2.6 - q * 0.16), al * 0.16 * (1 - q / 10));
+        }
+      }
+      drawGlow(b.overdue ? 'r' : 'b' + b.star.id, col, sp.x, sp.y, brs * 5.2, al * (b.task.status === 'done' ? 0.16 : 0.4));
+      b._sp = sp; b._sr = brs; b._col = col; b._al = al;
+    }
+
+    if (com.has && view.level !== 'task') {
+      var cp = w2s(com.x, com.y);
+      drawGlow('acc', hexRgb('#8fe3ff'), cp.x, cp.y, 44, 0.16);
+    }
+
+    /* --- crisp pass ------------------------------------------------------ */
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (i = 0; i < bodies.length; i++) {
+      b = bodies[i];
+      if (!b._sp) continue;
+      var scr = b._sp, r2 = b._sr, cc = b._col, aa = b._al;
+
+      ctx.globalAlpha = aa;
+      ctx.fillStyle = rgba(cc, b.task.status === 'done' ? 0.55 : 0.95);
+      ctx.beginPath(); ctx.arc(scr.x, scr.y, r2, 0, TAU); ctx.fill();
+
+      if (b.task.status === 'doing') {
+        // engaged: a bright halo, gently breathing
+        var pulse = reduced ? 0 : Math.sin(clockT * 2 + b.phase) * 0.12;
+        ctx.strokeStyle = rgba(mix(cc, WHITE, 0.45), 0.9);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(scr.x, scr.y, r2 + 3.4 + pulse * 2, 0, TAU); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    for (i = 0; i < stars.length; i++) {
+      s = stars[i];
+      p = w2s(s.x, s.y);
+      var d2 = starDim(s);
+      sr = Math.max(2.2, s.r * cam.z);
+      var fl = reduced ? 0 : (1 - s.health) * Math.sin(clockT * 2.3 + s.phase) * 0.1;
+      var br = PT.clamp(0.45 + s.health * 0.55 + fl, 0.15, 1) * d2;
+
+      ctx.globalAlpha = br;
+      ctx.fillStyle = s.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, sr, 0, TAU); ctx.fill();
+      ctx.fillStyle = rgba(mix(s.rgb, WHITE, 0.8), 0.9);
+      ctx.beginPath(); ctx.arc(p.x, p.y, sr * 0.45, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // star plate
+      var lift = sr + 18;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.font = '600 ' + (view.level === 'system' ? 11 : 12) + 'px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = 'rgba(233,237,246,' + (0.5 + 0.5 * d2).toFixed(2) + ')';
+      tracked(s.name.toUpperCase(), p.x, p.y + lift, 2.6, 'center');
+      ctx.font = '500 10px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = 'rgba(154,164,187,' + (0.35 + 0.55 * d2).toFixed(2) + ')';
+      var sub = s.open + ' OPEN';
+      if (s.overdue) sub += ' · ' + s.overdue + ' OVERDUE';
+      sub += ' · ' + Math.round(s.health * 100) + '% HEALTH';
+      tracked(sub, p.x, p.y + lift + 15, 1.6, 'center');
+    }
+
+    /* --- centre of mass crosshair --------------------------------------- */
+    if (com.has && view.level !== 'task') {
+      var q2 = w2s(com.x, com.y);
+      var na = cachedNext;
+      if (na && bodyById[na.task.id] && bodyById[na.task.id]._sp) {
+        var tp2 = bodyById[na.task.id]._sp;
+        ctx.strokeStyle = 'rgba(143,227,255,.22)';
+        ctx.setLineDash([3, 5]);
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(q2.x, q2.y); ctx.lineTo(tp2.x, tp2.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.strokeStyle = 'rgba(143,227,255,.62)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(q2.x, q2.y, 11, 0, TAU); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(q2.x - 24, q2.y); ctx.lineTo(q2.x - 15, q2.y);
+      ctx.moveTo(q2.x + 15, q2.y); ctx.lineTo(q2.x + 24, q2.y);
+      ctx.moveTo(q2.x, q2.y - 24); ctx.lineTo(q2.x, q2.y - 15);
+      ctx.moveTo(q2.x, q2.y + 15); ctx.lineTo(q2.x, q2.y + 24);
+      ctx.stroke();
+      ctx.font = '500 10px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = 'rgba(143,227,255,.8)';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      tracked('CENTRE OF MASS', q2.x, q2.y + 36, 2.2, 'center');
+    }
+
+    /* --- off-screen sibling markers ------------------------------------- */
+    if (view.level !== 'system') {
+      edgeMarkers.length = 0;
+      for (i = 0; i < stars.length; i++) {
+        s = stars[i];
+        if (s.id === view.projectId) continue;
+        p = w2s(s.x, s.y);
+        var inset = 46;
+        if (p.x > inset && p.x < vw - inset && p.y > inset && p.y < vh - inset) continue;
+        var mx = PT.clamp(p.x, inset, vw - inset);
+        var my = PT.clamp(p.y, inset + 40, vh - inset - 40);
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = s.color;
+        ctx.beginPath(); ctx.arc(mx, my, 3, 0, TAU); ctx.fill();
+        ctx.font = '500 10px ' + getComputedStyle(document.body).fontFamily;
+        ctx.fillStyle = 'rgba(154,164,187,.75)';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        tracked(s.name.toUpperCase(), mx, my + 14, 1.8, 'center');
+        ctx.globalAlpha = 1;
+        edgeMarkers.push({ id: s.id, x: mx, y: my });
+      }
+    } else {
+      edgeMarkers.length = 0;
+    }
+
+    /* --- focus reticle (keyboard) --------------------------------------- */
+    if (focusId) {
+      var fb = bodyById[focusId], fs = starById[focusId], fp = null, frr = 14;
+      if (fb && fb._sp) { fp = fb._sp; frr = Math.max(12, fb._sr + 8); }
+      else if (fs) { fp = w2s(fs.x, fs.y); frr = Math.max(16, fs.r * cam.z + 10); }
+      if (fp) {
+        ctx.strokeStyle = 'rgba(143,227,255,.95)';
+        ctx.lineWidth = 1.2;
+        var seg = frr * 0.55;
+        ctx.beginPath();
+        ctx.moveTo(fp.x - frr, fp.y - frr + seg); ctx.lineTo(fp.x - frr, fp.y - frr); ctx.lineTo(fp.x - frr + seg, fp.y - frr);
+        ctx.moveTo(fp.x + frr - seg, fp.y - frr); ctx.lineTo(fp.x + frr, fp.y - frr); ctx.lineTo(fp.x + frr, fp.y - frr + seg);
+        ctx.moveTo(fp.x + frr, fp.y + frr - seg); ctx.lineTo(fp.x + frr, fp.y + frr); ctx.lineTo(fp.x + frr - seg, fp.y + frr);
+        ctx.moveTo(fp.x - frr + seg, fp.y + frr); ctx.lineTo(fp.x - frr, fp.y + frr); ctx.lineTo(fp.x - frr, fp.y + frr - seg);
+        ctx.stroke();
+      }
+    }
+
+    /* --- hover label ----------------------------------------------------- */
+    var hb = hoverId ? bodyById[hoverId] : null;
+    if (hb && hb._sp) {
+      var hp = hb._sp;
+      var title = hb.task.title;
+      var meta = (hb.task.due ? 'DUE ' + PT.relDay(hb.task.due).toUpperCase() : 'NO DUE DATE') +
+                 ' · ' + hb.task.status.toUpperCase() +
+                 ' · ' + hb.task.priority.toUpperCase();
+      var right = hp.x < vw - 260;
+      var lx = hp.x + (right ? 16 : -16);
+      var ly = hp.y - 10;
+
+      ctx.strokeStyle = 'rgba(143,227,255,.5)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(hp.x + (right ? hb._sr + 2 : -hb._sr - 2), hp.y);
+      ctx.lineTo(lx, hp.y); ctx.lineTo(lx, ly + 4);
+      ctx.stroke();
+
+      ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'alphabetic';
+      ctx.font = '500 13px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = '#e9edf6';
+      var maxw = 260;
+      var shown = title;
+      while (ctx.measureText(shown).width > maxw && shown.length > 4) shown = shown.slice(0, -2);
+      if (shown !== title) shown += '…';
+      ctx.fillText(shown, lx, ly - 6);
+      ctx.font = '500 10px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillStyle = 'rgba(154,164,187,.9)';
+      ctx.textAlign = 'left';
+      tracked(meta, right ? lx : lx, ly + 10, 1.6, right ? 'left' : 'right');
+      ctx.textAlign = 'left';
+    }
+
+    /* --- drag tether ----------------------------------------------------- */
+    if (drag.active && drag.body) {
+      var db = drag.body;
+      var dsp = w2s(db.star.x, db.star.y);
+      var dp = w2s(drag.wx, drag.wy);
+      ctx.strokeStyle = 'rgba(143,227,255,.35)';
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath(); ctx.moveTo(dsp.x, dsp.y); ctx.lineTo(dp.x, dp.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(143,227,255,.95)';
+      ctx.beginPath(); ctx.arc(dp.x, dp.y, Math.max(3, db.size * cam.z), 0, TAU); ctx.fill();
+      ctx.font = '600 10px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#8fe3ff';
+      tracked('→ ' + drag.shell.toUpperCase(), dp.x, dp.y - 18, 2.2, 'center');
+    }
+  }
+
+  var edgeMarkers = [];
+
+  /* ==========================================================================
+     LOOP — continuous under motion, on-demand under reduced-motion.
+     ========================================================================== */
+  var rafId = 0, pendingDraw = false;
+
+  function frame(ts) {
+    rafId = 0;
+    if (document.hidden) return;
+    var dt = lastT ? Math.min(0.05, (ts - lastT) / 1000) : 0.016;
+    lastT = ts;
+    step(dt);
+    draw();
+    rafId = requestAnimationFrame(frame);
+  }
+  function startLoop() {
+    if (reduced || rafId || document.hidden) return;
+    lastT = 0;
+    rafId = requestAnimationFrame(frame);
+  }
+  function stopLoop() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+  }
+  function requestDraw() {
+    if (!reduced) { startLoop(); return; }
+    if (pendingDraw) return;
+    pendingDraw = true;
+    requestAnimationFrame(function () {
+      pendingDraw = false;
+      step(0);
+      draw();
+    });
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopLoop();
+    else { lastT = 0; requestDraw(); startLoop(); }
+  });
+
+  /* ==========================================================================
+     HIT TESTING
+     ========================================================================== */
+  function pickBody(sx, sy) {
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < bodies.length; i++) {
+      var b = bodies[i];
+      if (!b._sp) continue;
+      if (starDim(b.star) < 0.5) continue;
+      var d = Math.hypot(b._sp.x - sx, b._sp.y - sy);
+      var reach = Math.max(b._sr + 6, 15);
+      if (d < reach && d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+  function pickStar(sx, sy) {
+    for (var i = 0; i < edgeMarkers.length; i++) {
+      var m = edgeMarkers[i];
+      if (Math.hypot(m.x - sx, m.y - sy) < 26) return starById[m.id];
+    }
+    var best = null, bestD = Infinity;
+    for (i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var p = w2s(s.x, s.y);
+      var d = Math.hypot(p.x - sx, p.y - sy);
+      var reach = Math.max(s.r * cam.z + 10, 22);
+      if (d < reach && d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  }
+  function nearestShell(rWorld, star) {
+    var best = SHELLS[0], bd = Infinity;
+    for (var i = 0; i < SHELLS.length; i++) {
+      var n = SHELLS[i];
+      var mid = star.r + (BAND[n][0] + BAND[n][1]) / 2;
+      var d = Math.abs(rWorld - mid);
+      if (d < bd) { bd = d; best = n; }
+    }
+    return best;
+  }
+
+  /* ==========================================================================
+     POINTER — click, drag-to-shell, pan, wheel zoom
+     ========================================================================== */
+  var drag = { active: false, body: null, wx: 0, wy: 0, shell: 'todo' };
+  var press = null;
+
+  if (ctx) {
+    canvas.addEventListener('pointerdown', function (e) {
+      canvas.setPointerCapture(e.pointerId);
+      var b = pickBody(e.clientX, e.clientY);
+      var s = b ? null : pickStar(e.clientX, e.clientY);
+      press = {
+        id: e.pointerId, x: e.clientX, y: e.clientY, moved: false,
+        body: b, star: s, panX: pan.x, panY: pan.y
+      };
+      canvas.classList.add('is-grabbing');
+    });
+
+    canvas.addEventListener('pointermove', function (e) {
+      if (!press) {
+        var hb = pickBody(e.clientX, e.clientY);
+        var id = hb ? hb.id : null;
+        var overStar = !hb && pickStar(e.clientX, e.clientY);
+        canvas.classList.toggle('is-over', !!(hb || overStar));
+        if (id !== hoverId) { hoverId = id; requestDraw(); }
+        return;
+      }
+      var dx = e.clientX - press.x, dy = e.clientY - press.y;
+      if (!press.moved && Math.hypot(dx, dy) > 6) press.moved = true;
+      if (!press.moved) return;
+
+      if (press.body && view.level === 'project' && press.body.projectId === view.projectId) {
+        drag.active = true;
+        drag.body = press.body;
+        var w = s2w(e.clientX, e.clientY);
+        drag.wx = w.x; drag.wy = w.y;
+        var ddx = w.x - press.body.star.x;
+        var ddy = (w.y - press.body.star.y) / SQUASH;
+        drag.shell = nearestShell(Math.hypot(ddx, ddy), press.body.star);
+      } else {
+        pan.x = press.panX - dx / cam.z;
+        pan.y = press.panY - dy / cam.z;
+        pan.x = PT.clamp(pan.x, -1600, 1600);
+        pan.y = PT.clamp(pan.y, -1600, 1600);
+      }
+      requestDraw();
+    });
+
+    var endPointer = function (e) {
+      canvas.classList.remove('is-grabbing');
+      if (!press) return;
+      var p = press; press = null;
+
+      if (drag.active && drag.body) {
+        var b = drag.body, shell = drag.shell;
+        drag.active = false; drag.body = null;
+        if (b.task.status !== shell) {
+          PT.moveTask(b.id, shell);
+          announce(b.task.title + ' moved to ' + shell);
+        }
+        requestDraw();
+        return;
+      }
+      drag.active = false; drag.body = null;
+
+      if (p.moved) { requestDraw(); return; }
+      if (p.body) { selectTask(p.body.id); }
+      else if (p.star) { selectProject(p.star.id); }
+      requestDraw();
+    };
+    canvas.addEventListener('pointerup', endPointer);
+    canvas.addEventListener('pointercancel', function () { press = null; drag.active = false; drag.body = null; canvas.classList.remove('is-grabbing'); requestDraw(); });
+
+    canvas.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      setZoom(userZoom * Math.exp(-e.deltaY * 0.0014));
+    }, { passive: false });
+  }
+
+  function setZoom(z) {
+    userZoom = PT.clamp(z, 0.35, 4);
+    document.getElementById('zoom-val').textContent = userZoom.toFixed(2) + '×';
+    requestDraw();
+  }
+
+  /* ==========================================================================
+     NAVIGATION
+     ========================================================================== */
+  function setLevel(level, projectId, taskId) {
+    view.level = level;
+    view.projectId = projectId || null;
+    view.taskId = taskId || null;
+    pan.x = 0; pan.y = 0;
+    userZoom = 1;
+    document.getElementById('zoom-val').textContent = '1.00×';
+    document.documentElement.classList.toggle('inspecting', level === 'task');
+    syncUI();
+    requestDraw();
+  }
+  function selectProject(id) {
+    if (!starById[id]) return;
+    setLevel('project', id, null);
+    announce('Descended to ' + starById[id].name);
+  }
+  function selectTask(id) {
+    var b = bodyById[id];
+    if (!b) return;
+    setLevel('task', b.projectId, id);
+    announce('Selected ' + b.task.title);
+  }
+  function ascend() {
+    if (view.level === 'task') { setLevel('project', view.projectId, null); announce('Project view'); }
+    else if (view.level === 'project') { setLevel('system', null, null); announce('System view'); }
+  }
+
+  /* ==========================================================================
+     HUD SYNC
+     ========================================================================== */
+  var crumbsEl = document.getElementById('crumbs');
+  var readoutEl = document.getElementById('readout');
+  var verdictEl = document.getElementById('com-verdict');
+  var subEl = document.getElementById('com-sub');
+  var pullBtn = document.getElementById('pull');
+  var cachedNext = null;
+
+  function syncCrumbs() {
+    crumbsEl.innerHTML = '';
+    var mk = function (label, onClick, current) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      if (current) b.setAttribute('aria-current', 'true');
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    var sep = function () { var s = document.createElement('span'); s.className = 'sep'; s.textContent = '/'; return s; };
+
+    var mark = document.createElement('span');
+    mark.className = 'wordmark';
+    mark.textContent = 'Orbit';
+    crumbsEl.appendChild(mark);
+    crumbsEl.appendChild(sep());
+    crumbsEl.appendChild(mk('System', function () { setLevel('system', null, null); }, view.level === 'system'));
+
+    if (view.projectId && starById[view.projectId]) {
+      crumbsEl.appendChild(sep());
+      crumbsEl.appendChild(mk(starById[view.projectId].name, function () { setLevel('project', view.projectId, null); }, view.level === 'project'));
+    }
+    if (view.level === 'task' && bodyById[view.taskId]) {
+      crumbsEl.appendChild(sep());
+      crumbsEl.appendChild(mk(bodyById[view.taskId].task.title, function () {}, true));
+    }
+  }
+
+  function syncReadout() {
+    var scope = view.level === 'system' ? undefined : view.projectId;
+    var st = PT.stats(scope);
+    var mo = PT.momentum(14, scope);
+    var fc = PT.forecast(scope);
+    var eta = fc.done ? 'CLEAR' : (fc.days === Infinity ? 'STALLED' : PT.shortDate(fc.date.getTime()).toUpperCase());
+
+    var rows = [
+      ['Open', (st.todo + st.doing) + ' / ' + st.total, false],
+      ['Overdue', String(st.overdue), st.overdue > 0],
+      ['Hours left', st.hoursLeft + 'h', false],
+      ['Velocity', mo.perWeek + '/wk', false],
+      ['Clear by', eta, fc.days === Infinity]
+    ];
+    readoutEl.innerHTML = '';
+    for (var i = 0; i < rows.length; i++) {
+      var d = document.createElement('div');
+      d.className = 'r';
+      var l = document.createElement('span'); l.className = 'lbl'; l.textContent = rows[i][0];
+      var v = document.createElement('span'); v.className = 'val' + (rows[i][2] ? ' warn' : ''); v.innerHTML = '<strong></strong>';
+      v.firstChild.textContent = rows[i][1];
+      d.appendChild(l); d.appendChild(v);
+      readoutEl.appendChild(d);
+    }
+  }
+
+  function syncCOM() {
+    var scope = view.level === 'system' ? undefined : view.projectId;
+    cachedNext = PT.nextAction(scope);
+    var g = gravityVerdict();
+
+    if (!cachedNext) {
+      verdictEl.textContent = 'System at rest';
+      subEl.textContent = PT.tasks({}).length ? 'Every body has settled into the done belt.' : 'No bodies in the field — launch one.';
+      pullBtn.disabled = true;
+      return;
+    }
+    pullBtn.disabled = false;
+
+    if (view.level === 'system' && g.project) {
+      verdictEl.innerHTML = '';
+      var em = document.createElement('em');
+      em.textContent = g.project.name;
+      verdictEl.appendChild(em);
+      verdictEl.appendChild(document.createTextNode(' pulls hardest — ' + Math.round(g.share * 100) + '% of system mass'));
+    } else {
+      verdictEl.innerHTML = '';
+      var em2 = document.createElement('em');
+      em2.textContent = cachedNext.task.title;
+      verdictEl.appendChild(em2);
+      verdictEl.appendChild(document.createTextNode(' sits at the centre'));
+    }
+    subEl.textContent = 'Centre · ' + cachedNext.task.title + ' — ' + cachedNext.why;
+  }
+
+  pullBtn.addEventListener('click', function () {
+    if (!cachedNext) return;
+    selectTask(cachedNext.task.id);
+    announce('Flying to ' + cachedNext.task.title);
+  });
+
+  /* ==========================================================================
+     MANIFEST — the keyboard + screen-reader mirror of the canvas
+     ========================================================================== */
+  var manifestList = document.getElementById('manifest-list');
+  var manifestH = document.getElementById('manifest-h');
+
+  function statusWord(t) { return t.status === 'doing' ? 'in progress' : t.status; }
+
+  function syncManifest() {
+    var activeId = document.activeElement && document.activeElement.getAttribute
+      ? document.activeElement.getAttribute('data-mid') : null;
+
+    manifestList.innerHTML = '';
+    manifestH.textContent = view.level === 'system'
+      ? 'Manifest — whole field'
+      : 'Manifest — ' + (starById[view.projectId] ? starById[view.projectId].name : '');
+
+    var i, li, btn;
+
+    // systems first, so a keyboard user can switch projects without a mouse
+    for (i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      li = document.createElement('li');
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'item';
+      btn.setAttribute('data-mid', s.id);
+      btn.setAttribute('data-kind', 'star');
+      var pip = document.createElement('span'); pip.className = 'pip'; pip.style.background = s.color;
+      var tt = document.createElement('span'); tt.className = 't'; tt.textContent = s.name;
+      var mm = document.createElement('span'); mm.className = 'm';
+      mm.textContent = s.open + ' open · ' + Math.round(s.health * 100) + '%';
+      btn.appendChild(pip); btn.appendChild(tt); btn.appendChild(mm);
+      btn.setAttribute('aria-label', 'System ' + s.name + ', ' + s.open + ' open tasks, ' +
+        s.overdue + ' overdue, health ' + Math.round(s.health * 100) + ' percent. Enter to descend.');
+      btn.addEventListener('click', function (ev) { selectProject(ev.currentTarget.getAttribute('data-mid')); });
+      li.appendChild(btn);
+      manifestList.appendChild(li);
+    }
+
+    var scoped = bodies.slice();
+    if (view.level !== 'system') scoped = scoped.filter(function (b) { return b.projectId === view.projectId; });
+    scoped.sort(function (a, b) { return PT.score(b.task) - PT.score(a.task); });
+
+    for (i = 0; i < scoped.length; i++) {
+      (function (b) {
+        var t = b.task;
+        li = document.createElement('li');
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'item';
+        btn.setAttribute('data-mid', t.id);
+        btn.setAttribute('data-kind', 'task');
+        var pip = document.createElement('span'); pip.className = 'pip';
+        pip.style.background = b.overdue ? '#ff5568' : b.star.color;
+        pip.style.opacity = t.status === 'done' ? '.35' : '1';
+        var tt = document.createElement('span'); tt.className = 't'; tt.textContent = t.title;
+        var mm = document.createElement('span'); mm.className = 'm';
+        mm.textContent = statusWord(t) + (t.due ? ' · ' + PT.relDay(t.due) : '');
+        btn.appendChild(pip); btn.appendChild(tt); btn.appendChild(mm);
+        btn.setAttribute('aria-label', t.title + '. ' + b.star.name + '. ' + statusWord(t) +
+          '. ' + t.priority + ' priority. ' + (t.due ? 'Due ' + PT.relDay(t.due) + '.' : 'No due date.') +
+          (b.overdue ? ' Overdue.' : ''));
+        btn.addEventListener('click', function () { selectTask(t.id); });
+        li.appendChild(btn);
+        manifestList.appendChild(li);
+      })(scoped[i]);
+    }
+
+    if (!stars.length && !scoped.length) {
+      var empty = document.createElement('li');
+      empty.className = 'keys';
+      empty.textContent = 'The field is empty.';
+      manifestList.appendChild(empty);
+    }
+
+    if (activeId) {
+      var again = manifestList.querySelector('[data-mid="' + cssEscape(activeId) + '"]');
+      if (again) again.focus();
+    }
+  }
+  function cssEscape(v) { return String(v).replace(/["\\]/g, '\\$&'); }
+
+  // focus in the manifest drives the canvas reticle, and pulls the camera over
+  // if the body is off-screen — an invisible focus target would be useless.
+  manifestList.addEventListener('focusin', function (e) {
+    var id = e.target.getAttribute && e.target.getAttribute('data-mid');
+    if (!id) return;
+    focusId = id;
+    var b = bodyById[id], s = starById[id];
+    var p = null;
+    if (b && b._sp) p = b._sp;
+    else if (s) p = w2s(s.x, s.y);
+    if (p && (p.x < 40 || p.x > vw - 40 || p.y < 60 || p.y > vh - 60)) {
+      var target = b ? bodyPos(b) : { x: s.x, y: s.y };
+      pan.x = PT.clamp(target.x - (view.level === 'system' ? bounds.x : (starById[view.projectId] || { x: 0 }).x), -1600, 1600);
+      pan.y = PT.clamp(target.y - (view.level === 'system' ? bounds.y : (starById[view.projectId] || { y: 0 }).y), -1600, 1600);
+    }
+    requestDraw();
+  });
+  manifestList.addEventListener('focusout', function () {
+    window.setTimeout(function () {
+      if (!document.getElementById('manifest').contains(document.activeElement)) {
+        focusId = null;
+        requestDraw();
+      }
+    }, 0);
+  });
+
+  /* ==========================================================================
+     INSPECTOR
+     ========================================================================== */
+  var insp = document.getElementById('inspector');
+  var fTitle = document.getElementById('f-title');
+  var fDue = document.getElementById('f-due');
+  var fEst = document.getElementById('f-est');
+  var fEnergy = document.getElementById('f-energy');
+  var segStatus = document.getElementById('seg-status');
+  var segPrio = document.getElementById('seg-prio');
+  var delBtn = document.getElementById('f-delete');
+  var delArmed = false, delTimer = 0;
+
+  function buildSeg(el, values, labels, onPick) {
+    el.innerHTML = '';
+    for (var i = 0; i < values.length; i++) {
+      (function (v, label) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'rule-btn';
+        b.textContent = label;
+        b.setAttribute('data-v', v);
+        b.setAttribute('aria-pressed', 'false');
+        b.addEventListener('click', function () { onPick(v); });
+        el.appendChild(b);
+      })(values[i], labels[i]);
+    }
+  }
+  buildSeg(segStatus, STATUS_ORDER, ['Todo', 'Doing', 'Done'], function (v) {
+    if (!view.taskId) return;
+    PT.moveTask(view.taskId, v);
+    announce('Moved to ' + v);
+  });
+  buildSeg(segPrio, ['low', 'medium', 'high'], ['Low', 'Med', 'High'], function (v) {
+    if (!view.taskId) return;
+    PT.patchTask(view.taskId, { priority: v });
+    announce('Priority ' + v);
+  });
+
+  function markSeg(el, v) {
+    var bs = el.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) {
+      bs[i].setAttribute('aria-pressed', bs[i].getAttribute('data-v') === v ? 'true' : 'false');
+    }
+  }
+
+  fTitle.addEventListener('change', function () {
+    if (!view.taskId) return;
+    var v = fTitle.value.trim();
+    if (!v) { syncInspector(); return; }
+    PT.patchTask(view.taskId, { title: v });
+    announce('Renamed');
+  });
+  fTitle.addEventListener('keydown', function (e) { if (e.key === 'Enter') fTitle.blur(); });
+  fDue.addEventListener('change', function () {
+    if (!view.taskId) return;
+    PT.patchTask(view.taskId, { due: fromDateInput(fDue.value) });
+    announce('Due date updated');
+  });
+  fEst.addEventListener('change', function () {
+    if (!view.taskId) return;
+    var n = parseFloat(fEst.value);
+    PT.patchTask(view.taskId, { estimate: isNaN(n) || n < 0 ? 0 : n });
+  });
+  fEnergy.addEventListener('change', function () {
+    if (!view.taskId) return;
+    PT.patchTask(view.taskId, { energy: fEnergy.value });
+  });
+  delBtn.addEventListener('click', function () {
+    if (!view.taskId) return;
+    if (!delArmed) {
+      delArmed = true;
+      delBtn.textContent = 'Confirm — destroy body';
+      delTimer = window.setTimeout(function () { delArmed = false; delBtn.textContent = 'Delete body'; }, 4000);
+      return;
+    }
+    window.clearTimeout(delTimer);
+    delArmed = false;
+    delBtn.textContent = 'Delete body';
+    removeTaskById(view.taskId);
+  });
+
+  function removeTaskById(id) {
+    var b = bodyById[id];
+    if (!b) return;
+    var title = b.task.title, pid = b.projectId;
+    PT.removeTask(id);
+    setLevel('project', pid, null);
+    announce(title + ' removed');
+  }
+
+  function syncInspector() {
+    var b = view.level === 'task' ? bodyById[view.taskId] : null;
+    if (!b) { insp.hidden = true; return; }
+    insp.hidden = false;
+    var t = b.task;
+
+    document.getElementById('insp-dot').style.background = b.star.color;
+    document.getElementById('insp-project').textContent = b.star.name;
+    if (document.activeElement !== fTitle) fTitle.value = t.title;
+    if (document.activeElement !== fDue) fDue.value = toDateInput(t.due);
+    if (document.activeElement !== fEst) fEst.value = t.estimate == null ? '' : t.estimate;
+    fEnergy.value = t.energy || 'deep';
+    markSeg(segStatus, t.status);
+    markSeg(segPrio, t.priority);
+
+    var u = PT.urgency(t), st = PT.staleness(t), sc = PT.score(t);
+    setBar('m-urg', u); document.getElementById('m-urg-v').textContent = Math.round(u * 100) + '%';
+    setBar('m-stale', st); document.getElementById('m-stale-v').textContent = Math.round(st * 100) + '%';
+    setBar('m-score', PT.clamp(sc / 8, 0, 1)); document.getElementById('m-score-v').textContent = sc.toFixed(2);
+    document.getElementById('insp-why').textContent = PT.explain(t);
+    document.getElementById('insp-tags').textContent = (t.tags && t.tags.length) ? t.tags.join(' · ') : 'untagged';
+  }
+  function setBar(id, v) {
+    var i = document.getElementById(id).firstElementChild;
+    i.style.transform = 'scaleX(' + PT.clamp(v, 0, 1).toFixed(3) + ')';
+  }
+
+  /* ==========================================================================
+     QUICK ADD
+     ========================================================================== */
+  var quick = document.getElementById('quick');
+  var quickInput = document.getElementById('quick-input');
+  var quickPreview = document.getElementById('quick-preview');
+
+  function openQuick() {
+    quick.hidden = false;
+    quickInput.value = '';
+    renderParse('');
+    quickInput.focus();
+  }
+  function closeQuick() {
+    quick.hidden = true;
+    quickInput.blur();
+  }
+  function renderParse(text) {
+    quickPreview.innerHTML = '';
+    if (!text.trim()) return;
+    var p = PT.parse(text);
+    var proj = p.projectId ? PT.project(p.projectId) : (view.projectId ? PT.project(view.projectId) : PT.projects()[0]);
+    var bits = [
+      ['Title', p.title || '—'],
+      ['System', proj ? proj.name : '—'],
+      ['Priority', p.priority],
+      ['Due', p.due ? PT.relDay(p.due) : 'none'],
+      ['Est', p.estimate + 'h'],
+      ['Energy', p.energy]
+    ];
+    if (p.tags.length) bits.push(['Tags', p.tags.join(', ')]);
+    for (var i = 0; i < bits.length; i++) {
+      var s = document.createElement('span');
+      s.textContent = bits[i][0] + ' ';
+      var b = document.createElement('b');
+      b.textContent = bits[i][1];
+      s.appendChild(b);
+      quickPreview.appendChild(s);
+    }
+  }
+  quickInput.addEventListener('input', function () { renderParse(quickInput.value); });
+  quickInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); closeQuick(); return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var text = quickInput.value.trim();
+    if (!text) { closeQuick(); return; }
+    var fallback = view.projectId || (PT.projects()[0] && PT.projects()[0].id);
+    var t = PT.quickAdd(text, fallback);
+    closeQuick();
+    if (!t) { announce('Nothing to launch — give it a title'); return; }
+    announce('Launched ' + t.title + ' into ' + (PT.project(t.projectId) || {}).name);
+    setLevel('project', t.projectId, null);
+  });
+  document.getElementById('btn-new').addEventListener('click', openQuick);
+
+  /* ==========================================================================
+     LEGEND + RESET
+     ========================================================================== */
+  var legend = document.getElementById('legend');
+  var legendBtn = document.getElementById('btn-legend');
+  legendBtn.addEventListener('click', function () {
+    var open = legend.hidden;
+    legend.hidden = !open;
+    legendBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
+  var resetBtn = document.getElementById('btn-reset');
+  var resetArmed = false, resetTimer = 0;
+  resetBtn.addEventListener('click', function () {
+    if (!resetArmed) {
+      resetArmed = true;
+      resetBtn.textContent = 'Confirm reset?';
+      resetTimer = window.setTimeout(function () { resetArmed = false; resetBtn.textContent = 'Reset data'; }, 4000);
+      return;
+    }
+    window.clearTimeout(resetTimer);
+    resetArmed = false;
+    resetBtn.textContent = 'Reset data';
+    PT.reset();
+    setLevel('system', null, null);
+    announce('Field restored to the seed dataset');
+  });
+
+  document.getElementById('zoom-in').addEventListener('click', function () { setZoom(userZoom * 1.25); });
+  document.getElementById('zoom-out').addEventListener('click', function () { setZoom(userZoom / 1.25); });
+
+  /* ==========================================================================
+     KEYBOARD
+     ========================================================================== */
+  function activeBodyId() {
+    if (focusId && bodyById[focusId]) return focusId;
+    if (view.level === 'task' && view.taskId) return view.taskId;
+    return null;
+  }
+  function cycleStatus(id, dir) {
+    var b = bodyById[id];
+    if (!b) return;
+    var i = STATUS_ORDER.indexOf(b.task.status);
+    var n = STATUS_ORDER[PT.clamp(i + dir, 0, STATUS_ORDER.length - 1)];
+    if (n === b.task.status) return;
+    PT.moveTask(id, n);
+    announce(b.task.title + ' → ' + n);
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var el = e.target;
+    var tag = (el && el.tagName || '').toLowerCase();
+    var typing = tag === 'input' || tag === 'textarea' || tag === 'select';
+    if (typing) return;                       // fields handle their own keys
+
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    switch (e.key) {
+      case 'Escape':
+        if (!quick.hidden) { closeQuick(); e.preventDefault(); return; }
+        if (!legend.hidden) { legend.hidden = true; legendBtn.setAttribute('aria-expanded', 'false'); e.preventDefault(); return; }
+        ascend(); e.preventDefault(); return;
+      case 'Backspace':
+        ascend(); e.preventDefault(); return;
+      case 'Delete': {
+        var id = activeBodyId();
+        if (id) { removeTaskById(id); e.preventDefault(); }
+        return;
+      }
+      case '[': { var a = activeBodyId(); if (a) { cycleStatus(a, -1); e.preventDefault(); } return; }
+      case ']': { var b2 = activeBodyId(); if (b2) { cycleStatus(b2, 1); e.preventDefault(); } return; }
+      case '+': openQuick(); e.preventDefault(); return;
+      case 'n': case 'N': openQuick(); e.preventDefault(); return;
+      case '=': setZoom(userZoom * 1.25); e.preventDefault(); return;
+      case '-': case '_': setZoom(userZoom / 1.25); e.preventDefault(); return;
+      case '?': legendBtn.click(); e.preventDefault(); return;
+      case 'g': case 'G': pullBtn.click(); e.preventDefault(); return;
+      case 'r': case 'R': setZoom(1); e.preventDefault(); return;
+      default: return;
+    }
+  });
+
+  /* ==========================================================================
+     WIRE-UP
+     ========================================================================== */
+  function syncUI() {
+    syncCrumbs();
+    syncReadout();
+    syncCOM();
+    syncManifest();
+    syncInspector();
+    noticeEl.hidden = !(ctx && bodies.length === 0);
+    if (!noticeEl.hidden) noticeEl.textContent = stars.length ? 'No bodies in orbit — press + to launch one' : 'No systems';
+  }
+
+  PT.on('change', function () {
+    rebuild();
+    syncUI();
+    requestDraw();
+  });
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', resize);
+
+  // A live media-query listener means toggling the OS setting mid-session
+  // actually takes effect instead of needing a reload.
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var onMQ = function () {
+      reduced = PT.reducedMotion();
+      if (reduced) { stopLoop(); snapCamera(); requestDraw(); }
+      else startLoop();
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onMQ);
+    else if (mq.addListener) mq.addListener(onMQ);
+  }
+
+  rebuild();
+  resize();
+  syncUI();
+  snapCamera();
+  requestDraw();
+  startLoop();
+})();
+</script>
+</body>
+</html>
