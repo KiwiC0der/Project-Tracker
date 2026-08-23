@@ -31,11 +31,29 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.6.0',
+    date: '2026-08-22',
+    title: 'Windows you can maximise, panels that stay put, and feedback that speaks',
+    current: true,
+    archived: false,
+    summary:
+      'The board became a proper window manager — nothing escapes the frame, every ' +
+      'panel maximises — and the four workspace panels became full pages of their own.',
+    changes: [
+      'Popovers stay on top no matter how long you have been clicking panels',
+      'Panels can no longer be dragged off the board in any direction',
+      'Double-click a panel header, or use its new button, to maximise and restore',
+      'Progress, Priorities, Stale and Notes are full pages now, not shortcuts back to the dashboard',
+      'Deleting a task offers a real Undo that re-creates it — no more blocking confirm box',
+      'Toasts confirm what happened; a milestone gets a quiet celebration',
+      'A favicon, at last',
+    ],
+  },
+  {
     version: '2.5.1',
     date: '2026-08-22',
     title: 'Popovers escape the sidebar, and the theme list folds up',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'Two reported bugs — sidebar popovers hidden behind the dashboard, and an ' +
       'appearance panel taller than the screen — plus two data-safety fixes found ' +

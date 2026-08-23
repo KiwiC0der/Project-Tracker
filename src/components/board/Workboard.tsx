@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Maximize2, Minimize2 } from 'lucide-react'
 import * as I from '@/lib/insights'
 import type { Task } from '@/lib/store'
 import { BoardColumns, QuickAdd, Burndown, type Ctx } from './shared'
@@ -34,7 +35,14 @@ export const PANELS: Record<PanelId, { title: string }> = {
   notes: { title: 'Notes' },
 }
 
-interface Geo { fx: number; fy: number; fw: number; fh: number; z: number }
+/** `pre` is the rectangle a panel had before it was maximised — present only
+    while it IS maximised, which is also how the maximised state is stored.
+    Keeping it beside the live rectangle rather than overwriting it is what
+    makes restore exact: it replays numbers, it never recomputes them. */
+interface Geo {
+  fx: number; fy: number; fw: number; fh: number; z: number
+  pre?: { fx: number; fy: number; fw: number; fh: number }
+}
 type Tree = { leaf: PanelId } | { dir: 'row' | 'col'; ratio: number; a: Tree; b: Tree }
 
 const MIN_W = 210, MIN_H = 130
@@ -265,6 +273,15 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
         if (ids.length) {
           setOpen(ids)
           geoRef.current = s.geo ?? {}
+          // Normalise the saved stacking values back down to 20, 21, 22… in the
+          // order they were already in. The counter only ever climbs and it is
+          // persisted, so across a long-lived install it creeps upward one click
+          // at a time with nothing to stop it. Rewriting on load keeps the ORDER
+          // — the only part of it anyone can see — and throws away the
+          // magnitude, so the numbers cannot run away over months of use.
+          Object.values(geoRef.current)
+            .sort((a, b) => (a.z || 0) - (b.z || 0))
+            .forEach((g, i) => { g.z = 20 + i })
           // The stacking counter has to resume above the restored values, or
           // the first grab after a reload assigns a z BELOW panels that were
           // raised in an earlier session and the panel you just grabbed sinks.
@@ -304,12 +321,21 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
     const r = rect()
     return { x: g.fx * r.width, y: g.fy * r.height, w: g.fw * r.width, h: g.fh * r.height }
   }
+  /* A panel is a window on a desk, and a desk does not let you shove a window
+     off its edge and lose it. BOTH axes clamp the WHOLE rectangle inside the
+     board, not just a grabbable sliver of the drag head: the old
+     `-(w - 90)` / `height - 26` slack kept the head reachable but let the far
+     edge sit outside a host that paints `overflow: visible`, and that overhang
+     grew the DOCUMENT — dragging a panel hard right or hard down put a
+     scrollbar on the page and parked the panel past the dock, in blank space.
+     Containment also means a panel can never come to rest under the dock strip,
+     because the dock lives outside the board box entirely. */
   const clampPx = (p: { x: number; y: number; w: number; h: number }) => {
     const r = rect()
     p.w = I.clamp(p.w, MIN_W, Math.max(MIN_W, r.width))
     p.h = I.clamp(p.h, MIN_H, Math.max(MIN_H, r.height))
-    p.x = I.clamp(p.x, -(p.w - 90), Math.max(0, r.width - 90))
-    p.y = I.clamp(p.y, 0, Math.max(0, r.height - 26))
+    p.x = I.clamp(p.x, 0, Math.max(0, r.width - p.w))
+    p.y = I.clamp(p.y, 0, Math.max(0, r.height - p.h))
     return p
   }
   const commitPx = (id: PanelId, p: { x: number; y: number; w: number; h: number }) => {
@@ -347,7 +373,11 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
   const toLocked = useCallback(() => {
     const r = rect()
     const items = open.map((id) => {
-      const g = geoRef.current[id] ?? { fx: 0, fy: 0, fw: 0.5, fh: 0.5, z: 20 }
+      const live = geoRef.current[id] ?? { fx: 0, fy: 0, fw: 0.5, fh: 0.5, z: 20 }
+      // A maximised panel covers the whole board, and a guillotine cut through
+      // several identical full-board rectangles cannot recover the arrangement
+      // the user actually made. Lock from the rectangle underneath it.
+      const g = live.pre ?? live
       return {
         id,
         x: g.fx * r.width, y: g.fy * r.height,
@@ -457,13 +487,56 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
     save()
   }, [mode, save])
 
+  /* ---- maximise (loose only) ---------------------------------------------
+     Windows-11 behaviour: double-clicking the header toggles it, and a control
+     beside the close button does the same for anyone who would rather click or
+     tab to it. Restore replays the EXACT fractions the panel had — `pre` is
+     stored, never recomputed — so a maximise round-trip is lossless.
+
+     `pre` is PERSISTED alongside the geometry rather than cleared on unload,
+     and that is deliberate. Because the maximised rectangle is written to
+     fx/fy/fw/fh while the real one is parked in `pre`, a reload restores both:
+     the panel comes back maximised, and the control that puts it back is still
+     sitting in its header. Clearing on unload would also avoid stranding a
+     layout, but `beforeunload` and `pagehide` do not fire reliably — a killed
+     tab, bfcache, mobile Safari — and the one reload where it fails to fire is
+     the reload that hands the user a full-board panel whose original rectangle
+     has already been overwritten. Persisting cannot fail that way. */
+  const isMaxed = (id: PanelId) => Boolean(geoRef.current[id]?.pre)
+
+  const toggleMax = useCallback((id: PanelId) => {
+    if (mode !== 'loose') return
+    const g = geoRef.current[id]
+    if (!g) return
+    if (g.pre) {
+      g.fx = g.pre.fx; g.fy = g.pre.fy; g.fw = g.pre.fw; g.fh = g.pre.fh
+      delete g.pre
+    } else {
+      g.pre = { fx: g.fx, fy: g.fy, fw: g.fw, fh: g.fh }
+      g.fx = 0; g.fy = 0; g.fw = 1; g.fh = 1
+    }
+    // Filling the board with a panel is also choosing it, so it selects and
+    // raises — a maximised panel sitting under another one would be absurd.
+    setActive(id)
+    g.z = ++zRef.current
+    applyGeo(id)
+    // geoRef is a ref, so nothing above would re-render on its own, and both
+    // the header icon and its aria-pressed read from it.
+    repaint()
+    save()
+  }, [mode, save, repaint])
+
   /* ---- drag + resize (loose only) ---- */
   const startDrag = (id: PanelId) => (e: React.PointerEvent) => {
     if (e.target instanceof HTMLElement && e.target.closest('button')) return
     const el = e.currentTarget as HTMLElement
     const g = geoRef.current[id]
     if (!g) return
-    const start = toPx(g)
+    // From where the panel actually IS, not where the fractions say it is: a
+    // board that has shrunk since the geometry was written renders the panel
+    // clamped inside it while the stored fractions still point outside, and
+    // reading them raw here would make the first grab jump.
+    const start = clampPx(toPx(g))
     const px = e.clientX, py = e.clientY
     capture(el, e.pointerId)
     const onMove = (ev: PointerEvent) =>
@@ -483,7 +556,7 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
     const el = e.currentTarget as HTMLElement
     const g = geoRef.current[id]
     if (!g) return
-    const s = toPx(g)
+    const s = clampPx(toPx(g))
     const px = e.clientX, py = e.clientY
     capture(el, e.pointerId)
     const onMove = (ev: PointerEvent) => {
@@ -623,8 +696,13 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
       const g = geoRef.current[id]
       if (!s || !g) return
       e.preventDefault()
+      // Snapping to a half is an explicit new rectangle, so it ends any
+      // maximise rather than leaving a half-board panel still claiming to be
+      // maximised with a stale rectangle waiting behind it.
+      delete g.pre
       g.fx = s[0]; g.fy = s[1]; g.fw = s[2]; g.fh = s[3]; g.z = ++zRef.current
       applyGeo(id)
+      repaint()
       save()
       return
     }
@@ -641,42 +719,92 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
   }
 
   /* ---- render ---- */
-  const frame = (id: PanelId, extra?: string) => (
+  const frame = (id: PanelId, extra?: string) => {
+    const loose = mode === 'loose'
+    const maxed = loose && isMaxed(id)
+    return (
     <section
       key={id}
       data-panel={id}
       data-active={active === id ? 'true' : undefined}
+      data-maxed={maxed ? 'true' : undefined}
       aria-label={`${PANELS[id].title} panel`}
       onPointerDownCapture={() => selectPanel(id)}
       onFocusCapture={() => selectPanel(id)}
+      /* Escape restores a maximised panel — but handled HERE, on the panel,
+         rather than pushed onto the LIFO escape stack in pickers.tsx. That
+         stack is for transient layers; maximised is a state a panel can hold
+         for hours, and a handler parked on top of the stack for that long
+         would swallow the Escape that closes the sidebar the whole time.
+         Local means it only fires when focus is already inside this panel, and
+         stopping propagation keeps this one keypress from ALSO reaching the
+         sidebar's window listener behind it. */
+      onKeyDown={maxed ? (e) => {
+        if (e.key !== 'Escape') return
+        // Escape inside a field belongs to the field, not the window frame.
+        if (e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return
+        e.preventDefault()
+        e.stopPropagation()
+        toggleMax(id)
+        boardRef.current?.querySelector<HTMLElement>(`[data-panel="${id}"] [data-head]`)?.focus()
+      } : undefined}
       className={`pane-cast flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-surface ${extra ?? ''}`}
-      style={mode === 'loose' ? { position: 'absolute' } : undefined}
+      style={loose ? { position: 'absolute' } : undefined}
     >
       <header
         data-head
         tabIndex={0}
-        onPointerDown={mode === 'loose' ? startDrag(id) : startSwap(id)}
+        // A maximised panel does not move, so its head is not a grab handle —
+        // the same as a maximised window, which you must restore before you can
+        // drag it. Double-click still lands, because it is not a drag.
+        onPointerDown={loose ? (maxed ? undefined : startDrag(id)) : startSwap(id)}
+        onDoubleClick={loose ? (e) => {
+          if (e.target instanceof HTMLElement && e.target.closest('button')) return
+          toggleMax(id)
+        } : undefined}
         onKeyDown={headKey(id)}
-        aria-label={mode === 'loose'
-          ? `${PANELS[id].title} — drag to move`
+        aria-label={loose
+          ? (maxed
+            ? `${PANELS[id].title} — maximised; double-click or press Escape to restore`
+            : `${PANELS[id].title} — drag to move, double-click to maximise`)
           : `${PANELS[id].title} — drag onto another panel to swap, or Alt with an arrow key`}
-        className="flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-surface-2 px-2.5 active:cursor-grabbing"
+        className={`flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2.5
+          ${maxed ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
       >
         <h2 className="ui-face text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted">
           {PANELS[id].title}
         </h2>
         <span className="flex-1" />
+        {/* Loose only. A locked panel already fills its tile exactly, so the
+            control there would be a button that visibly does nothing — the
+            honest thing is for it not to be there. */}
+        {loose && (
+          <button
+            type="button"
+            aria-pressed={maxed}
+            aria-label={`${maxed ? 'Restore' : 'Maximise'} ${PANELS[id].title}`}
+            onClick={() => toggleMax(id)}
+            className="rounded p-0.5 text-muted transition-colors motion-reduce:transition-none hover:bg-brand/20 hover:text-foreground"
+          >
+            {maxed
+              ? <Minimize2 size={12} aria-hidden="true" />
+              : <Maximize2 size={12} aria-hidden="true" />}
+          </button>
+        )}
         <button type="button" aria-label={`Close ${PANELS[id].title}`} onClick={() => closePanel(id)}
           className="rounded px-1 text-muted hover:bg-brand/20 hover:text-foreground">✕</button>
       </header>
       <div className="pt-pad min-h-0 flex-1 overflow-auto">
         <PanelBody id={id} ctx={ctx} />
       </div>
-      {mode === 'loose' && ['n','s','e','w','nw','ne','sw','se'].map((d) => (
+      {/* No edge handles while maximised: it already fills the board, and a
+          resize from one would silently contradict the restore rectangle. */}
+      {loose && !maxed && ['n','s','e','w','nw','ne','sw','se'].map((d) => (
         <span key={d} onPointerDown={startResize(id, d)} className={handleClass(d)} />
       ))}
     </section>
-  )
+    )
+  }
 
   /* Each split is a flex box and each slot is a flex child sized by `ratio`.
      The leaf section must itself be `flex-1`, or a panel sits at its content
@@ -732,8 +860,26 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
 
       {/* Gutters carry the space between tiles, so the container adds no gap
           of its own — a gap plus a gutter reads as two rules, not one. */}
+      {/* `z-0` here is LOAD-BEARING, not decoration — the prototype carried
+          exactly this rule on #views and it was lost in the port. Selecting a
+          loose panel raises its inline z-index off a counter that only ever
+          climbs and is written to storage, so with `position: relative` and
+          `z-index: auto` this host establishes no stacking context and those
+          values escape into the ROOT one. They then beat the chrome: measured
+          at 88 after sixty panel clicks in a single session, which is past the
+          z-[80] the sidebar "+" and Theme popovers portal to <body> with — the
+          popover opens and a board panel is what the pointer actually hits.
+          A stacking context here contains the counter permanently, whatever it
+          climbs to. Do not delete this.
+
+          `overflow-clip` is the second half of the same containment, for the
+          geometry rather than the paint order: clampPx already keeps every
+          panel inside the board, and this makes that structural instead of
+          arithmetic, so no rounding or future slack can grow the document a
+          scrollbar. `clip` and not `hidden` — this must not quietly become a
+          scroll container of its own. */}
       <div ref={boardRef}
-        className={`pt-pad relative min-h-0 flex-1 ${mode === 'locked' ? 'flex' : ''}`}>
+        className={`pt-pad relative z-0 min-h-0 flex-1 overflow-clip ${mode === 'locked' ? 'flex' : ''}`}>
         {mode === 'loose'
           ? open.map((id) => frame(id))
           : tree && renderTree(tree)}

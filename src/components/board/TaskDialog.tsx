@@ -144,8 +144,12 @@ export function TaskDialog({ ctx }: { ctx: Ctx }) {
               {I.shortDate(new Date(t.created_at).getTime())}
             </span>
             <span className="flex-1" />
+            {/* No confirm() here any more. Deleting a task now raises an Undo
+                toast that genuinely re-creates the row, so a blocking dialog
+                would ask permission for something already reversible — and
+                the native one is unstyled, unthemed, and stops the world. */}
             <button type="button"
-              onClick={() => { if (confirm(`Delete "${t.title}"?`)) { ctx.remove(t.id); ctx.setEditing(null) } }}
+              onClick={() => { ctx.remove(t.id); ctx.setEditing(null) }}
               className="inline-flex items-center gap-1.5 rounded-lg border border-brand/50 px-2.5 py-1 text-xs text-brand hover:bg-brand/10">
               <Trash2 size={12} />Delete
             </button>

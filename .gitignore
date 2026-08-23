@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-demo/
+dist-verify/
 .wrangler/
 
 # Archived release builds and the worktrees they are built from. Reproducible

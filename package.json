@@ -1,7 +1,7 @@
 {
   "name": "project-tracker",
   "private": true,
-  "version": "2.5.1",
+  "version": "2.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,16 +15,19 @@
     "@paper-design/shaders": "^0.0.80",
     "@radix-ui/react-slot": "^1.1.2",
     "@supabase/supabase-js": "^2.48.1",
+    "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.474.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "sonner": "^2.0.8",
     "tailwind-merge": "^2.6.0",
     "three": "^0.172.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
+    "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
