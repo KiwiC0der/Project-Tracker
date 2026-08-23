@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import * as I from '@/lib/insights'
 import type { Task } from '@/lib/store'
-import { BoardColumns, QuickAdd, Burndown, type Ctx } from './shared'
+import { BoardColumns, QuickAdd, Burndown, isAllScope, type Ctx } from './shared'
+import { projectTone } from './ProjectDialog'
 
 /* ============================================================================
    WORKBOARD — two layout modes over one set of panels.
@@ -35,10 +36,13 @@ export const PANELS: Record<PanelId, { title: string }> = {
   notes: { title: 'Notes' },
 }
 
-/** `pre` is the rectangle a panel had before it was maximised — present only
-    while it IS maximised, which is also how the maximised state is stored.
-    Keeping it beside the live rectangle rather than overwriting it is what
-    makes restore exact: it replays numbers, it never recomputes them. */
+/** `pre` is the rectangle a panel had before it was maximised, and its
+    presence — not the live rectangle — is what says the panel is maximised.
+    A maximised panel can be dragged and resized away from full board and the
+    restore rectangle survives that, so `pre` means "a restore is pending",
+    never "this panel is exactly full-board right now". Keeping it beside the
+    live rectangle rather than overwriting it is what makes restore exact: it
+    replays numbers, it never recomputes them. */
 interface Geo {
   fx: number; fy: number; fw: number; fh: number; z: number
   pre?: { fx: number; fy: number; fw: number; fh: number }
@@ -374,10 +378,15 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
     const r = rect()
     const items = open.map((id) => {
       const live = geoRef.current[id] ?? { fx: 0, fy: 0, fw: 0.5, fh: 0.5, z: 20 }
-      // A maximised panel covers the whole board, and a guillotine cut through
-      // several identical full-board rectangles cannot recover the arrangement
-      // the user actually made. Lock from the rectangle underneath it.
-      const g = live.pre ?? live
+      // A guillotine cut through several identical full-board rectangles cannot
+      // recover the arrangement the user actually made, so a panel still SITTING
+      // at full board locks from the rectangle underneath it. The test is the
+      // live rectangle, not `pre` alone: a maximised panel that has since been
+      // dragged or resized has a perfectly good rectangle of its own on screen,
+      // and locking from a stale `pre` would tile the board from a shape the
+      // user can no longer see.
+      const full = live.fw > 0.99 && live.fh > 0.99
+      const g = full && live.pre ? live.pre : live
       return {
         id,
         x: g.fx * r.width, y: g.fy * r.height,
@@ -492,6 +501,14 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
      beside the close button does the same for anyone who would rather click or
      tab to it. Restore replays the EXACT fractions the panel had — `pre` is
      stored, never recomputed — so a maximise round-trip is lossless.
+
+     Maximised is a LATCHED state, not a shape. `pre` says a restore rectangle
+     is waiting; it does not claim the panel is still full-board. Everything
+     that reshapes a panel — an edge handle, a header drag, an Alt+arrow snap —
+     leaves `pre` alone, because the alternative throws the restore rectangle
+     away the moment a maximised panel is nudged, and the user is then left
+     rebuilding by hand a size the app was already holding. A restore is the
+     only thing that clears `pre`, which is what it is for.
 
      `pre` is PERSISTED alongside the geometry rather than cleared on unload,
      and that is deliberate. Because the maximised rectangle is written to
@@ -696,10 +713,11 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
       const g = geoRef.current[id]
       if (!s || !g) return
       e.preventDefault()
-      // Snapping to a half is an explicit new rectangle, so it ends any
-      // maximise rather than leaving a half-board panel still claiming to be
-      // maximised with a stale rectangle waiting behind it.
-      delete g.pre
+      // `pre` deliberately SURVIVES a snap. Alt+arrow is the keyboard's only
+      // way to reshape a panel, so it has to leave exactly the state a pointer
+      // resize leaves — restore rectangle latched, control still able to put
+      // the panel back where it started. Clearing it here would make the
+      // keyboard path lose a rectangle the mouse path keeps.
       g.fx = s[0]; g.fy = s[1]; g.fw = s[2]; g.fh = s[3]; g.z = ++zRef.current
       applyGeo(id)
       repaint()
@@ -754,10 +772,11 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
       <header
         data-head
         tabIndex={0}
-        // A maximised panel does not move, so its head is not a grab handle —
-        // the same as a maximised window, which you must restore before you can
-        // drag it. Double-click still lands, because it is not a drag.
-        onPointerDown={loose ? (maxed ? undefined : startDrag(id)) : startSwap(id)}
+        // A maximised panel drags like any other. Refusing the grab only made
+        // sense while maximised meant "pinned at full board"; now that the edges
+        // resize it too, a head that cannot be moved would leave the panel
+        // reshapeable but stranded against the top-left corner.
+        onPointerDown={loose ? startDrag(id) : startSwap(id)}
         onDoubleClick={loose ? (e) => {
           if (e.target instanceof HTMLElement && e.target.closest('button')) return
           toggleMax(id)
@@ -765,11 +784,10 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
         onKeyDown={headKey(id)}
         aria-label={loose
           ? (maxed
-            ? `${PANELS[id].title} — maximised; double-click or press Escape to restore`
+            ? `${PANELS[id].title} — maximised; drag to move, double-click or press Escape to restore`
             : `${PANELS[id].title} — drag to move, double-click to maximise`)
           : `${PANELS[id].title} — drag onto another panel to swap, or Alt with an arrow key`}
-        className={`flex h-8 shrink-0 items-center gap-2 border-b border-border bg-surface-2 px-2.5
-          ${maxed ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
+        className="flex h-8 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-surface-2 px-2.5 active:cursor-grabbing"
       >
         <h2 className="ui-face text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-muted">
           {PANELS[id].title}
@@ -797,9 +815,12 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
       <div className="pt-pad min-h-0 flex-1 overflow-auto">
         <PanelBody id={id} ctx={ctx} />
       </div>
-      {/* No edge handles while maximised: it already fills the board, and a
-          resize from one would silently contradict the restore rectangle. */}
-      {loose && !maxed && ['n','s','e','w','nw','ne','sw','se'].map((d) => (
+      {/* Handles stay while maximised. Full board is a starting size, not a
+          cage: pulling an edge in from it is how you get a big-but-not-total
+          panel without first restoring, losing that size, and dragging it back
+          out. clampPx still owns containment, so a panel reshaped from full
+          board is as unable to overhang the board as any other. */}
+      {loose && ['n','s','e','w','nw','ne','sw','se'].map((d) => (
         <span key={d} onPointerDown={startResize(id, d)} className={handleClass(d)} />
       ))}
     </section>
@@ -822,20 +843,53 @@ export function Workboard({ ctx, focus }: { ctx: Ctx; focus?: PanelFocus | null 
     )
   }
 
+  /* Taskbar semantics, and they are load-bearing rather than a flourish.
+     A panel that sits UNDER another cannot have its header controls clicked at
+     all — maximise and close live at the far right of the head, which is
+     exactly the strip a cascading overlap covers, so the click lands on the
+     panel in front instead. That is why the maximise icon appeared to work
+     "only when nothing else is open": it was never being pressed. Nothing in
+     the header can fix that, because the header is the thing being covered.
+     The dock can, because the dock is never covered. So, like a Windows
+     taskbar: clicking a panel that is open but behind raises it to the front;
+     clicking the one already in front closes it. Every panel's controls are
+     therefore one click away no matter what is stacked on top of it. */
+  const dockAction = (id: PanelId): 'open' | 'raise' | 'close' => {
+    if (!open.includes(id)) return 'open'
+    // Only loose mode has a stacking order to be behind. A locked tile is
+    // always fully visible, so there is nothing to raise it out of.
+    if (mode === 'loose' && active !== id) return 'raise'
+    return 'close'
+  }
+
   const dock = (
     <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-border bg-background px-3 py-2">
-      {(Object.keys(PANELS) as PanelId[]).map((id) => (
+      {(Object.keys(PANELS) as PanelId[]).map((id) => {
+        const act = dockAction(id)
+        return (
         <button key={id} type="button"
-          onClick={() => (open.includes(id) ? closePanel(id) : openPanel(id))}
+          aria-label={`${act === 'open' ? 'Open' : act === 'raise' ? 'Bring to front' : 'Close'} ${PANELS[id].title}`}
+          onClick={() => {
+            if (act === 'open') return openPanel(id)
+            if (act === 'close') return closePanel(id)
+            selectPanel(id)
+            // Focus the head, not the panel body: it is the panel's own tab
+            // stop, so a keyboard user lands where tabbing would have put them,
+            // one Tab away from the maximise and close buttons they came for.
+            boardRef.current
+              ?.querySelector<HTMLElement>(`[data-panel="${id}"] [data-head]`)
+              ?.focus()
+          }}
           className={`ui-face rounded-md border px-2 py-1 text-[0.62rem] uppercase tracking-wider transition-colors
             ${open.includes(id) ? 'border-brand/50 bg-brand/10 text-foreground' : 'border-border text-muted hover:text-foreground'}`}>
           {PANELS[id].title}
         </button>
-      ))}
+        )
+      })}
       <span className="flex-1" />
       <span className="num hidden text-[0.62rem] text-muted md:inline">
         {mode === 'loose'
-          ? 'Drag a head to move · edges and corners resize'
+          ? 'Drag a head to move · edges and corners resize · a dock button brings a panel to the front'
           : 'Pull a gutter to resize · drag a head onto another to swap · Alt+arrows'}
         {' · Alt+Z toggles'}
       </span>
@@ -952,13 +1006,27 @@ function ProgressPanel({ ctx }: { ctx: Ctx }) {
 
 function PrioritiesPanel({ ctx }: { ctx: Ctx }) {
   const n = I.nextAction(ctx.projectTasks)
+  // Merged, "Do this next" could be pointing at any project — without the
+  // label the panel names a task the user cannot place.
+  const from = isAllScope(ctx.activeProject) && n
+    ? ctx.projects.find((p) => p.id === n.task.project_id)
+    : null
   return (
     <>
       {n ? (
         <div className="mb-3">
           <p className="ui-face mb-1 text-[0.6rem] font-semibold uppercase tracking-wider text-muted">Do this next</p>
           <p className="text-sm font-semibold leading-snug">{n.task.title}</p>
-          <p className="num mt-0.5 text-[0.65rem] text-muted">{n.why}</p>
+          <p className="num mt-0.5 text-[0.65rem] text-muted">
+            {from && (
+              <>
+                <span aria-hidden="true" className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                  style={{ background: projectTone(from.color) }} />
+                {from.name} ·{' '}
+              </>
+            )}
+            {n.why}
+          </p>
           <button type="button"
             onClick={() => ctx.move(n.task.id, n.task.status === 'doing' ? 'done' : 'doing')}
             className="mt-2 rounded-lg border border-brand/50 bg-brand/10 px-2.5 py-1 text-xs">
@@ -1016,7 +1084,10 @@ function NotesPanel({ ctx }: { ctx: Ctx }) {
   const addNote = () => {
     const text = v.trim()
     if (!text) return
-    commit([{ id: `n${Date.now().toString(36)}`, ts: Date.now(), project: ctx.activeProject, text }, ...notes])
+    // The All sentinel is not a project id; a note stamped with it would never
+    // match a project filter again. All means "filed under none".
+    const project = isAllScope(ctx.activeProject) ? null : ctx.activeProject
+    commit([{ id: `n${Date.now().toString(36)}`, ts: Date.now(), project, text }, ...notes])
     setV('')
   }
 

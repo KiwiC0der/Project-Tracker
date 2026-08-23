@@ -17,9 +17,9 @@
    app falls back to the localStorage demo backend.
    ========================================================================== */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { projectRef, scanDist } from './lib/credential-scan.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const out = path.join(root, 'dist-demo')
@@ -39,22 +39,9 @@ if (r.status !== 0) process.exit(r.status ?? 1)
 
 /* Verify rather than assume. A build that silently picked up .env would send
    a tester at the production database, so this refuses to hand over a bundle
-   it has not checked. The ref is read from .env so nothing is hardcoded. */
-let ref = null
-if (existsSync(path.join(root, '.env'))) {
-  const m = readFileSync(path.join(root, '.env'), 'utf8')
-    .match(/VITE_SUPABASE_URL\s*=\s*https:\/\/([a-z0-9]+)\.supabase\.co/i)
-  ref = m?.[1] ?? null
-}
-
-const assets = path.join(out, 'assets')
-const bundles = existsSync(assets)
-  ? readdirSync(assets).filter((f) => f.endsWith('.js')).map((f) => readFileSync(path.join(assets, f), 'utf8'))
-  : []
-
-const leaks = []
-if (ref && bundles.some((b) => b.includes(ref))) leaks.push(`Supabase project ref "${ref}"`)
-if (bundles.some((b) => /eyJhbGciOiJIUzI1NiIs/.test(b))) leaks.push('a JWT anon key')
+   it has not checked. The scan is shared with the preview guard in
+   scripts/preview.mjs, so both agree on what counts as a live credential. */
+const leaks = scanDist(out, projectRef(root))
 
 if (leaks.length) {
   console.error(`\ndemo build ABORTED — dist-demo contains ${leaks.join(' and ')}.`)

@@ -31,11 +31,32 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    version: '2.7.0',
+    date: '2026-08-23',
+    title: 'Every project at once, projects you can order, and a dock that behaves like a taskbar',
+    current: true,
+    archived: false,
+    summary:
+      'An All scope that aggregates every view, sidebar projects you can reorder, ' +
+      'a plan each project can declare — and the maximise control finally reachable ' +
+      'when something is stacked on top of it.',
+    changes: [
+      'An "All projects" scope: List, Progress, Priorities, Stale, Notes, Calendar and Reports all aggregate',
+      'Tasks show which project they belong to, but only when you are looking at all of them',
+      'Ordering is per-project, so All says so plainly instead of pretending',
+      'Drag the grip, or Alt with an arrow, to reorder the projects in your sidebar',
+      'An Edit project button on the project page, where you are already looking',
+      'Projects can declare a target date and hours a week — and the app reads both back',
+      'A project with nothing finished yet can still be forecast, from the hours you budgeted',
+      'The maximise icon was never broken; it was covered. The dock now brings any panel to the front',
+      'A maximised panel can be moved and resized, and still restores to the exact size it had',
+    ],
+  },
+  {
     version: '2.6.0',
     date: '2026-08-22',
     title: 'Windows you can maximise, panels that stay put, and feedback that speaks',
-    current: true,
-    archived: false,
+    archived: true,
     summary:
       'The board became a proper window manager — nothing escapes the frame, every ' +
       'panel maximises — and the four workspace panels became full pages of their own.',

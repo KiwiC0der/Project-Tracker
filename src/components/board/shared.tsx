@@ -4,7 +4,18 @@ import * as I from '@/lib/insights'
 import * as O from '@/lib/order'
 import { LiquidMetalButton } from '@/components/ui/liquid-metal-button'
 import { CreateTaskDialog } from './CreateTaskDialog'
+import { projectTone } from './ProjectDialog'
 import type { Project, Task, TaskStatus, User } from '@/lib/store'
+
+/** The scope that means "every project at once". A sentinel rather than null,
+    because null already means "this account has no projects" — an empty account
+    and an all-projects view are opposite states, and conflating them would make
+    a brand new account render as if it were showing everything. Never a real
+    row id, so no `project_id` may ever be written with it. */
+export const ALL_PROJECTS = '__all__'
+
+/** Ask this rather than string-comparing at each of the two dozen call sites. */
+export const isAllScope = (id: string | null): boolean => id === ALL_PROJECTS
 
 /** Everything a panel or view needs. Passed down rather than context-ed so a
     panel is trivially testable and its dependencies are visible. */
@@ -35,13 +46,20 @@ export interface Ctx {
    invalid HTML that screen readers flatten into one confusing control.
    ========================================================================== */
 function TaskCard({
-  t, ctx, onGrab, dragging, onKey,
+  t, ctx, onGrab, dragging, onKey, project, keyShortcuts, grabbable,
 }: {
   t: Task
   ctx: Ctx
   onGrab: (e: React.PointerEvent, id: string) => void
   dragging: boolean
   onKey: (e: React.KeyboardEvent, id: string) => void
+  /** Set only in All scope. Inside one project every card would carry the
+      same label, which is noise, not information. */
+  project?: Project | null
+  keyShortcuts: string
+  /** False in All scope. A grip and a grab cursor on a card that cannot be
+      dragged is a promise the board does not keep. */
+  grabbable: boolean
 }) {
   const od = I.isOverdue(t)
   const due = I.dueAt(t)
@@ -59,23 +77,23 @@ function TaskCard({
     >
       {/* Touch drags start here and only here — `touch-action: none` on the
           whole card would stop the page scrolling under a finger. */}
-      <span
+      {grabbable && <span
         data-grip
         aria-hidden="true"
         style={{ touchAction: 'none' }}
         className="mt-0.5 shrink-0 cursor-grab text-muted opacity-0 transition-opacity group-hover/card:opacity-60 active:cursor-grabbing"
       >
         <GripVertical size={13} />
-      </span>
+      </span>}
 
       <button
         type="button"
         onClick={() => ctx.setSelected(t.id)}
         onDoubleClick={() => ctx.setEditing(t.id)}
         onKeyDown={(e) => onKey(e, t.id)}
-        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight"
+        aria-keyshortcuts={keyShortcuts}
         data-drag-ok
-        className="min-w-0 flex-1 cursor-grab text-left active:cursor-grabbing"
+        className={`min-w-0 flex-1 text-left ${grabbable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       >
         <span className={`block text-sm leading-snug ${t.status === 'done' ? 'text-muted line-through' : ''}`}>
           {t.title}
@@ -89,6 +107,13 @@ function TaskCard({
             </span></>
           )}
         </span>
+        {project && (
+          <span className="num mt-1 flex items-center gap-1 text-[0.65rem] text-muted">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full"
+              style={{ background: projectTone(project.color) }} />
+            {project.name}
+          </span>
+        )}
       </button>
 
       <button
@@ -127,6 +152,25 @@ interface Drag {
 export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) {
   const root = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
+  const all = isAllScope(ctx.activeProject)
+  const byId = new Map(ctx.projects.map((p) => [p.id, p]))
+
+  /* A merged column has no hand-order to honour: `position` is only comparable
+     within one project and one status (see the header of lib/order.ts), so
+     interleaving two projects by position would sort by numbers that were never
+     measured against each other. Sorting by the sidebar's project order FIRST
+     and only then by position keeps each project's own hand-order intact as a
+     contiguous block — the one arrangement the user actually authored — and
+     makes the merged list stable across reloads. */
+  const rank = new Map(ctx.projects.map((p, i) => [p.id, i]))
+  const columnFor = (status: TaskStatus) =>
+    all
+      ? ctx.tasks
+        .filter((t) => t.status === status)
+        .sort((a, b) =>
+          (rank.get(a.project_id) ?? Infinity) - (rank.get(b.project_id) ?? Infinity) ||
+          O.byOrder(a, b))
+      : O.column(ctx.tasks, ctx.activeProject, status)
 
   /** Which column, and which slot in it, is under the pointer. Indices are
       counted with the dragged card excluded, which is exactly the frame
@@ -149,6 +193,8 @@ export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) 
   }
 
   const onGrab = (e: React.PointerEvent, id: string) => {
+    // Reordering is per-project and there is no merged order to drop into.
+    if (all) return
     if (e.button !== 0 && e.pointerType === 'mouse') return
     const el = e.target as HTMLElement
     // The title is a button and covers most of the card, so it has to be
@@ -201,6 +247,9 @@ export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) 
     const ci = cols.indexOf(t.status)
 
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Same reason the pointer drag is off in All scope. Left/right stay live:
+      // those write a status, not a position.
+      if (all) return
       const to = at + (e.key === 'ArrowUp' ? -1 : 1)
       if (to < 0 || to >= here.length) return
       e.preventDefault()
@@ -214,9 +263,15 @@ export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) 
   }
 
   return (
-    <div ref={root} className={`grid gap-3 ${stacked ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'}`}>
+    <div ref={root}>
+      {all && (
+        <p className="num mb-2 text-[0.65rem] text-muted">
+          Every project at once · ordering is per-project — open one to reorder
+        </p>
+      )}
+      <div className={`grid gap-3 ${stacked ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'}`}>
       {I.COLUMNS.map((col) => {
-        const items = O.column(ctx.tasks, ctx.activeProject, col.id)
+        const items = columnFor(col.id)
         const rest = items.filter((t) => t.id !== drag?.id)
         const showLine = drag?.live && drag.to === col.id
 
@@ -238,7 +293,15 @@ export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) 
                       ? { transform: `translate(${drag.dx}px, ${drag.dy}px)`, zIndex: 40, position: 'relative' }
                       : undefined}
                   >
-                    <TaskCard t={t} ctx={ctx} onGrab={onGrab} onKey={onKey} dragging={drag?.id === t.id && drag.live} />
+                    <TaskCard
+                      t={t} ctx={ctx} onGrab={onGrab} onKey={onKey}
+                      dragging={drag?.id === t.id && drag.live}
+                      project={all ? byId.get(t.project_id) ?? null : null}
+                      grabbable={!all}
+                      keyShortcuts={all
+                        ? 'Alt+ArrowLeft Alt+ArrowRight'
+                        : 'Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight'}
+                    />
                   </div>
                 </div>
               )
@@ -247,6 +310,7 @@ export function BoardColumns({ ctx, stacked }: { ctx: Ctx; stacked?: boolean }) 
           </div>
         )
       })}
+      </div>
     </div>
   )
 }

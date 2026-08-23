@@ -9,6 +9,86 @@ at `/v/<version>/` — see [`docs/VERSIONING.md`](./docs/VERSIONING.md).
 
 ---
 
+## [2.7.0] — 2026-08-23
+
+### Added
+
+- **An "All projects" scope.** Pick it from the sidebar or the top-bar selector
+  and every surface aggregates: List, Progress, Priorities, Stale, Notes,
+  Calendar, Reports, and the dashboard panels. A sentinel id (`ALL_PROJECTS`)
+  rather than `null`, because `null` already means "this account has no projects
+  at all" and an empty account must not render as though it were showing
+  everything. Tasks carry their project's dot and name in this scope only —
+  always showing it would be noise inside a single project.
+- **Ordering is per-project, and All says so.** Task `position` values are only
+  comparable within one project and one status column, so a merged column has no
+  meaningful hand-order. Drag-to-reorder and Alt+Up/Down are therefore off in All
+  scope — the grip and grab cursors go with them, so no card advertises a gesture
+  it will not honour — and one line above the columns explains why. Moving a task
+  *between* status columns still works, because that is a status write, not an
+  ordering one. Merged columns sort by sidebar project order, then `byOrder`:
+  both orderings the user actually made, and stable across reloads.
+- **Reorder the projects in the sidebar.** Drag by the grip, or Alt+Up/Down from
+  the keyboard, with a live-region announcement either way. Pointer Events rather
+  than HTML5 drag-and-drop, for the same reason task dragging moved in 2.3.0:
+  HTML5 DnD never fires on touch. Dense `0..n-1` renumbering rather than the
+  sparse `ORDER_STEP` scheme tasks use — that scheme exists to protect
+  `tasks.updated_at`, which the insights layer reads, and nothing reads
+  `projects.updated_at`. A drop back into the original slot writes nothing.
+- **An "Edit project" button on the project page**, beside "Delete project".
+  Editing was previously reachable only from the "+" popover on the sidebar's
+  Projects group — a place nobody looks when they are already reading the project.
+- **Projects can declare a plan: a target date and hours a week.** Both are read
+  back, not merely stored. `forecast()` cannot answer at all for a project with
+  nothing finished — zero velocity returns Infinity — so `budgetForecast()` uses
+  the declared hours as the missing divisor, labelled as an intention rather than
+  a measurement. `targetVerdict()` puts the declared date next to the expected one
+  and names the gap. A project that declared no plan renders no strip, rather than
+  a row of dashes implying it failed to.
+
+### Fixed
+
+- **The maximise icon appeared to work only when nothing else was open.** It was
+  never broken — it was covered. Measured with `elementFromPoint` on each button's
+  own centre, four overlapping panels: `progress` (z=20) and `priorities` (z=22)
+  had their controls intercepted by the panel in front. The maximise and close
+  buttons sit at the far right of the header, exactly the strip a cascading
+  overlap covers, while the exposed left end is where a double-click naturally
+  lands — which is why one worked and the other did not. Nothing in the header can
+  fix that, because the header is the thing being covered.
+- **The dock is now a taskbar**, which can fix it, because the dock is never
+  covered. A panel that is open but behind comes to the front; the one already in
+  front closes. Every panel's controls are one click away whatever is stacked on
+  top, and the raise focuses the panel head so a keyboard user lands one Tab from
+  the buttons they came for.
+- **A maximised panel can be dragged and resized**, and still restores to its
+  pre-maximise rectangle. `Geo.pre` now means "a restore is pending" rather than
+  "this panel is exactly full-board", so reshaping a maximised panel no longer has
+  to choose between keeping the new shape and keeping the old one. Measured
+  round-trip: `29,38,648,308` → maximised → reshaped to `440,269,1000,500` →
+  restored to `29,38,648,308`, exactly. Containment holds under a 3000px drag.
+  Alt+arrow snapping stopped discarding the restore rectangle, which would have
+  left keyboard users strictly worse off than mouse users.
+- `toLocked()` no longer tiles from a stale restore rectangle. It now checks that
+  the live rectangle is still full-board before preferring `pre`, so locking a
+  maximised-then-resized panel uses the shape actually on screen.
+- The "New project" row lines up with the project rows above it, now that those
+  have a grip gutter.
+
+### Notes
+
+- `supabase/schema.sql` gains `projects.target_date` and `projects.weekly_hours`
+  as idempotent `add column if not exists` statements. **Run it.** Until you do,
+  PostgREST rejects any write naming those columns — and it rejects the *whole*
+  statement, which would take project editing down entirely rather than degrade.
+  So `createProject`/`updateProject` detect that specific failure, retry without
+  the planning fields, and surface one sentence naming the file that fixes it.
+- `npm run preview` is now guarded: it refuses to serve a `dist/` carrying live
+  Supabase credentials, because that bundle is the production app pointed at
+  production data and signing up in it creates a real account. Override with
+  `ALLOW_LIVE_PREVIEW=1` for a pre-deploy sanity check. The guard cannot cover
+  `npx vite preview --outDir dist` — reach for `preview:demo` by habit.
+
 ## [2.6.0] — 2026-08-22
 
 ### Fixed
@@ -411,6 +491,7 @@ The original Project Tracker.
 - Drag-and-drop board across To do / In progress / Done.
 - Projects in a sidebar with open counts.
 
+[2.7.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.7.0
 [2.6.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.6.0
 [2.5.1]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.1
 [2.5.0]: https://github.com/KiwiC0der/Project-Tracker/releases/tag/v2.5.0

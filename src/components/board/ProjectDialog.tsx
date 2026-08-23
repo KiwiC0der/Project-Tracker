@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Check, Loader2, Trash2, X } from 'lucide-react'
+import { DatePicker } from '@/components/ui/pickers'
 import type { ProjectStatus } from '@/lib/store'
 
 /* ============================================================================
@@ -64,9 +65,20 @@ export interface ProjectDraft {
   description: string
   color: string
   status: ProjectStatus
+  /** ISO yyyy-mm-dd, or null for "no target". See Project.target_date. */
+  target_date: string | null
+  /** Null for "not budgeted" — deliberately distinct from 0. */
+  weekly_hours: number | null
 }
 
-const EMPTY: ProjectDraft = { name: '', description: '', color: 'violet', status: 'active' }
+const EMPTY: ProjectDraft = {
+  name: '', description: '', color: 'violet', status: 'active',
+  target_date: null, weekly_hours: null,
+}
+
+/** projects.weekly_hours is `check (weekly_hours between 1 and 168)`. */
+const HOURS_MIN = 1
+const HOURS_MAX = 168
 
 export function ProjectDialog({
   open,
@@ -326,6 +338,46 @@ export function ProjectDialog({
                   {s.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Planning sits after identity (name, colour, status) because it is the
+              part a new project often cannot answer yet. Two fields side by side
+              rather than stacked: the dialog is already near the height of a
+              laptop viewport, and the box scrolls rather than overflowing. */}
+          <div className="mb-3 grid gap-2.5 sm:grid-cols-2">
+            <div>
+              <span className={label} id={`${uid}-t`}>
+                Target date <span className="font-normal normal-case tracking-normal">optional</span>
+              </span>
+              <DatePicker
+                id={`${uid}-t-btn`}
+                value={draft.target_date}
+                onChange={(d) => set('target_date', d)}
+              />
+            </div>
+            <div>
+              <label className={label} htmlFor={`${uid}-w`}>
+                Hours a week <span className="font-normal normal-case tracking-normal">optional</span>
+              </label>
+              <input
+                id={`${uid}-w`} name="project-weekly-hours" type="number" inputMode="numeric"
+                className={`${field} num`}
+                min={HOURS_MIN} max={HOURS_MAX} step={1}
+                placeholder="—"
+                value={draft.weekly_hours ?? ''}
+                /* An empty field is "not budgeted", not zero — and the column's
+                   CHECK starts at 1, so a cleared box must send null rather than
+                   a value Postgres would reject. */
+                onChange={(e) => {
+                  const raw = e.target.value.trim()
+                  if (!raw) return set('weekly_hours', null)
+                  const n = Math.round(Number(raw))
+                  set('weekly_hours', Number.isFinite(n)
+                    ? Math.min(HOURS_MAX, Math.max(HOURS_MIN, n))
+                    : null)
+                }}
+              />
             </div>
           </div>
 

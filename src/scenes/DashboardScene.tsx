@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ListTodo, Plus, LogOut, Trash2, Loader2,
   FolderKanban, Calendar as CalIcon, BarChart3, Settings as GearIcon,
   Sun, Moon, Monitor, Palette, History, ExternalLink, Check,
-  Pencil, Gauge, Flag, Hourglass, StickyNote, ChevronDown,
+  Pencil, Gauge, Flag, Hourglass, StickyNote, ChevronDown, GripVertical,
 } from 'lucide-react'
 import {
   SidebarProvider, Sidebar, SidebarHeader, SidebarContent, SidebarFooter,
@@ -14,6 +14,7 @@ import { usePopover, PopoverPortal, pushEscape, refocus, PANEL as POPOVER } from
 import {
   listProjects, listTasks, createProject, createTask, updateTask, deleteTask,
   deleteProject, updateProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
+  takeMigrationWarning,
   type Project, type Task, type TaskStatus, type User,
 } from '@/lib/store'
 import * as I from '@/lib/insights'
@@ -33,7 +34,7 @@ import { TaskDialog } from '@/components/board/TaskDialog'
 import {
   ProjectDialog, projectTone, PROJECT_STATUSES, type ProjectDraft,
 } from '@/components/board/ProjectDialog'
-import { BoardColumns, QuickAdd, Burndown, type Ctx } from '@/components/board/shared'
+import { BoardColumns, QuickAdd, Burndown, ALL_PROJECTS, isAllScope, type Ctx } from '@/components/board/shared'
 
 type View =
   | 'dashboard' | 'list' | 'progress' | 'priorities' | 'stale' | 'notes'
@@ -251,6 +252,195 @@ function ProjectPicker({
   )
 }
 
+/* ============================================================================
+   PROJECT ROWS — the sidebar's project list, reorderable.
+
+   Pointer events, not HTML5 drag-and-drop, for the reason BoardColumns already
+   gives: HTML5 DnD never fires on touch, so a phone could not reorder at all.
+
+   The drag starts from a grip BESIDE the row, not from the row. The row is a
+   navigation button; if it also owned pointerdown, opening a project would be
+   a coin flip against a 6px threshold and every mis-drag would navigate away.
+   ========================================================================== */
+const PROJECT_LIFT = 6
+
+interface ProjectDrag {
+  id: string
+  dy: number
+  live: boolean
+  /** Slot in the list WITHOUT the dragged row — the frame `onReorder` takes. */
+  index: number
+}
+
+function ProjectRows({
+  projects, tasks, activeProject, onOpen, onReorder, onNew,
+}: {
+  projects: Project[]
+  tasks: Task[]
+  /** The id whose List view is on screen, or null — drives `active`. */
+  activeProject: string | null
+  onOpen: (id: string) => void
+  onReorder: (id: string, index: number) => void
+  onNew: () => void
+}) {
+  const root = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<ProjectDrag | null>(null)
+  const [note, setNote] = useState('')
+
+  const announce = (id: string, index: number) => {
+    const name = projects.find((p) => p.id === id)?.name ?? 'Project'
+    setNote(`${name} moved to position ${index + 1} of ${projects.length}`)
+  }
+
+  /** Which slot the pointer is over, counted with the dragged row excluded so
+      "drop at 2" means the same thing whichever direction it travelled. */
+  const slotAt = (y: number, id: string) => {
+    const rows = [...(root.current?.querySelectorAll<HTMLElement>('[data-project]') ?? [])]
+      .filter((r) => r.dataset.project !== id)
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect()
+      if (y < r.top + r.height / 2) return i
+    }
+    return rows.length
+  }
+
+  const onGrab = (e: React.PointerEvent, id: string) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    const from = projects.findIndex((p) => p.id === id)
+    if (from < 0) return
+    const y0 = e.clientY
+    let cur: ProjectDrag = { id, dy: 0, live: false, index: from }
+
+    const move = (ev: PointerEvent) => {
+      const dy = ev.clientY - y0
+      const live = cur.live || Math.abs(dy) > PROJECT_LIFT
+      cur = { ...cur, dy, live, index: live ? slotAt(ev.clientY, id) : cur.index }
+      // Cancels the scroll a finger would otherwise start under the grip.
+      if (live) ev.preventDefault()
+      setDrag(cur)
+    }
+    const up = () => {
+      removeEventListener('pointermove', move)
+      removeEventListener('pointerup', up)
+      removeEventListener('pointercancel', up)
+      // A drop back into the row's own slot is not a move: no write, and no
+      // announcement, because nothing happened for a screen reader to report.
+      if (cur.live && cur.index !== from) { onReorder(id, cur.index); announce(id, cur.index) }
+      setDrag(null)
+    }
+    addEventListener('pointermove', move, { passive: false })
+    addEventListener('pointerup', up)
+    addEventListener('pointercancel', up)
+  }
+
+  /* Alt+arrows — the same language TaskCard and the Workboard headers use for
+     moving something without a pointer. */
+  const onKey = (e: React.KeyboardEvent, id: string) => {
+    if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
+    const at = projects.findIndex((p) => p.id === id)
+    const to = at + (e.key === 'ArrowUp' ? -1 : 1)
+    if (at < 0 || to < 0 || to >= projects.length) return
+    e.preventDefault()
+    onReorder(id, to)
+    announce(id, to)
+    /* Reordering re-keys the list, so React unmounts the row this keypress came
+       from and focus falls to <body> — leaving a keyboard user unable to press
+       Alt+Arrow a second time without tabbing back in. Deferred to the frame
+       after commit for the reason pickers.tsx documents on `refocus`: a
+       synchronous focus() runs before the new row exists. */
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-project="${id}"] button`)
+        ?.focus()
+    })
+  }
+
+  const rest = drag ? projects.filter((p) => p.id !== drag.id) : projects
+
+  const openAll = tasks.filter((t) => t.status !== 'done').length
+
+  return (
+    <div ref={root}>
+      <SidebarMenu>
+        {/* A scope, not a project: no grip, no `data-project`, and outside the
+            reorder list entirely, so dropping a real project at the very top
+            still lands at index 0 rather than fighting this row for it. Padded
+            like the New-project row so its dot lines up with the ones below. */}
+        <SidebarMenuItem className="flex items-center gap-0.5 pl-[calc(0.75rem+2px)]">
+          <SidebarMenuButton
+            active={isAllScope(activeProject)}
+            onClick={() => onOpen(ALL_PROJECTS)}
+            className="min-w-0 flex-1"
+          >
+            <span className="h-2 w-2 shrink-0 rounded-full border border-muted" />
+            <span className="truncate">All projects</span>
+            <span className="num ml-auto text-[0.7rem] text-muted">{openAll}</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        {projects.map((p) => {
+          const s = I.stats(tasks.filter((t) => t.project_id === p.id))
+          const lifted = drag?.id === p.id && drag.live
+          const before = drag?.live && rest[drag.index]?.id === p.id
+          const after = drag?.live && drag.index >= rest.length && rest[rest.length - 1]?.id === p.id
+          return (
+            <SidebarMenuItem
+              key={p.id}
+              data-project={p.id}
+              className="relative flex items-center gap-0.5"
+              style={lifted ? { transform: `translateY(${drag!.dy}px)`, zIndex: 30 } : undefined}
+            >
+              {(before || after) && (
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute inset-x-0 h-0.5 rounded-full bg-brand ${before ? '-top-0.5' : '-bottom-0.5'}`}
+                />
+              )}
+              <span
+                data-grip
+                aria-hidden="true"
+                onPointerDown={(e) => onGrab(e, p.id)}
+                style={{ touchAction: 'none' }}
+                className="shrink-0 cursor-grab rounded p-0.5 text-muted opacity-40 transition-opacity hover:opacity-100 active:cursor-grabbing motion-reduce:transition-none"
+              >
+                <GripVertical size={13} />
+              </span>
+              <SidebarMenuButton
+                active={activeProject === p.id}
+                onClick={() => onOpen(p.id)}
+                onKeyDown={(e) => onKey(e, p.id)}
+                aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                className={`min-w-0 flex-1 ${lifted ? 'bg-surface-2 shadow-lg' : ''}`}
+              >
+                {/* The dot is the only place a project's colour is visible, so
+                    it reads `p.color` rather than a fixed accent. 'violet' —
+                    every legacy row — resolves back to the theme brand, so
+                    nothing changes appearance. */}
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: projectTone(p.color) }}
+                />
+                <span className="truncate">{p.name}</span>
+                <span className="num ml-auto text-[0.7rem] text-muted">
+                  {s.total - s.done}
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )
+        })}
+        {/* Padded by the width of a grip so this row's icon lines up with the
+            project dots above it. An empty spacer span would be one more thing
+            for a screen reader to skip past for no gain. */}
+        <SidebarMenuItem className="flex items-center gap-0.5 pl-[calc(0.75rem+2px)]">
+          <SidebarMenuButton onClick={onNew} className="min-w-0 flex-1">
+            <Plus size={16} />New project
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+      <p aria-live="polite" className="sr-only">{note}</p>
+    </div>
+  )
+}
+
 export function DashboardScene({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   return (
     <SidebarProvider>
@@ -322,8 +512,11 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     return () => { cancelled = true }
   }, [])
 
+  /* The All scope is the whole board, not a project that happens to match
+     nothing — filtering on the sentinel would hand every panel an empty list. */
   const projectTasks = useMemo(
-    () => (activeProject ? tasks.filter((t) => t.project_id === activeProject) : []),
+    () => (isAllScope(activeProject) ? tasks
+      : activeProject ? tasks.filter((t) => t.project_id === activeProject) : []),
     [tasks, activeProject],
   )
 
@@ -431,7 +624,12 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
 
   const add = useCallback(async (text: string, projectId?: string) => {
     const p = I.parse(text, projects)
-    const pid = p.projectId || projectId || activeProject
+    /* The All sentinel is not a row id. Writing it as `project_id` would create
+       a task belonging to a project that does not exist, invisible from every
+       project view — so All falls back to the first project instead. Callers
+       that care (CreateTaskDialog) pass an explicit id and never reach this. */
+    const scoped = isAllScope(activeProject) ? projects[0]?.id ?? null : activeProject
+    const pid = p.projectId || projectId || scoped
     if (!p.title || !pid) return null
     try {
       const t = await createTask(pid, p.title, 'todo', p.priority)
@@ -444,6 +642,13 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       }
       setTasks((cur) => [...cur, t])
       setSelected(t.id)
+      /* Only when the scope could not name a project and we picked one on the
+         user's behalf. Every other path either had an explicit id or a single
+         active project, and announcing those would be narrating their own
+         click back at them. */
+      if (!p.projectId && !projectId && isAllScope(activeProject)) {
+        notify.success(`Added to "${projects.find((x) => x.id === pid)?.name ?? 'a project'}"`)
+      }
       return t
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create that task.')
@@ -464,6 +669,11 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
     setProjects((cur) => cur.map((p) => (p.id === id ? { ...p, ...d } : p)))
     try {
       await updateProject(id, d)
+      // The planning columns can be missing from a database that has not had
+      // schema.sql re-run. store.ts retries without them rather than failing
+      // the whole save; this is the only place the user finds out it happened.
+      const pending = takeMigrationWarning()
+      if (pending) setError(pending)
       notify.success('Project saved')
       setEditingProject(null)
       return null
@@ -472,6 +682,42 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       const msg = err instanceof Error ? err.message : 'Could not save that project.'
       setError(msg)
       return msg
+    }
+  }, [projects])
+
+  /**
+   * Put a project at `index` of the sidebar list, `index` counted with the
+   * moved project already removed.
+   *
+   * Positions here are DENSE (0, 1, 2, …), deliberately not the sparse
+   * ORDER_STEP scheme `planMove` uses for tasks. That scheme exists purely to
+   * protect `tasks.updated_at`, which the insights layer reads as staleness
+   * and as a completion date — renumbering a column would date every task in
+   * it today. Nothing reads `projects.updated_at`, and a sidebar holds a
+   * handful of rows, so dense numbering is the cheaper trade here. Do not
+   * "fix" this into the sparse scheme by analogy with tasks.
+   */
+  const reorderProject = useCallback(async (id: string, index: number) => {
+    const from = projects.findIndex((p) => p.id === id)
+    if (from < 0) return
+    const next = [...projects]
+    const [moved] = next.splice(from, 1)
+    next.splice(Math.max(0, Math.min(index, next.length)), 0, moved)
+
+    // Only rows whose number actually changed are written — a drag that lands
+    // back where it started issues nothing at all.
+    const writes = next
+      .map((p, i) => ({ id: p.id, position: i }))
+      .filter((w, i) => next[i].position !== i)
+    if (!writes.length) return
+
+    const prev = projects
+    setProjects(next.map((p, i) => ({ ...p, position: i })))
+    try {
+      await Promise.all(writes.map((w) => updateProject(w.id, { position: w.position })))
+    } catch (err) {
+      setProjects(prev)
+      setError(err instanceof Error ? err.message : 'Could not reorder your projects.')
     }
   }, [projects])
 
@@ -486,7 +732,12 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
 
   const submitProject = useCallback(async (d: ProjectDraft) => {
     try {
-      const p = await createProject(d.name, d.description, d.color, d.status)
+      const p = await createProject(d.name, d.description, d.color, d.status, {
+        target_date: d.target_date,
+        weekly_hours: d.weekly_hours,
+      })
+      const pending = takeMigrationWarning()
+      if (pending) setError(pending)
       setProjects((cur) => [...cur, p])
       setActiveProject(p.id)
       setView('list')
@@ -597,37 +848,14 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
               />
             }
           >
-            <SidebarMenu>
-              {projects.map((p) => {
-                const s = I.stats(tasks.filter((t) => t.project_id === p.id))
-                return (
-                  <SidebarMenuItem key={p.id}>
-                    <SidebarMenuButton
-                      active={activeProject === p.id && view === 'list'}
-                      onClick={() => { setActiveProject(p.id); setView('list') }}
-                    >
-                      {/* The dot is the only place a project's colour is
-                          visible, so it reads `p.color` rather than a fixed
-                          accent. 'violet' — every legacy row — resolves back to
-                          the theme brand, so nothing changes appearance. */}
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ background: projectTone(p.color) }}
-                      />
-                      <span className="truncate">{p.name}</span>
-                      <span className="num ml-auto text-[0.7rem] text-muted">
-                        {s.total - s.done}
-                      </span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )
-              })}
-              <SidebarMenuItem>
-                <SidebarMenuButton onClick={() => setCreatingProject(true)}>
-                  <Plus size={16} />New project
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
+            <ProjectRows
+              projects={projects}
+              tasks={tasks}
+              activeProject={view === 'list' ? activeProject : null}
+              onOpen={(id) => { setActiveProject(id); setView('list') }}
+              onReorder={reorderProject}
+              onNew={() => setCreatingProject(true)}
+            />
           </SidebarCollapsibleGroup>
 
           <SidebarCollapsibleGroup
@@ -705,7 +933,9 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
             <Workboard ctx={ctx} />
           ) : (
             <div className="scene-enter flex-1 overflow-auto p-4 sm:p-6">
-              {view === 'list' && <ListView ctx={ctx} onDeleteProject={askDeleteProject} />}
+              {view === 'list' && (
+                <ListView ctx={ctx} onEditProject={setEditingProject} onDeleteProject={askDeleteProject} />
+              )}
               {view === 'progress' && <ProgressView ctx={ctx} />}
               {view === 'priorities' && <PrioritiesView ctx={ctx} />}
               {view === 'stale' && <StaleView ctx={ctx} />}
@@ -743,6 +973,11 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
             description: editProject.description,
             color: editProject.color,
             status: editProject.status,
+            /* Coalesced because a row read from a database that predates these
+               columns has them as undefined, and the draft's contract is
+               "a date or null" — undefined would leave the field uncontrolled. */
+            target_date: editProject.target_date ?? null,
+            weekly_hours: editProject.weekly_hours ?? null,
           }}
           armDelete={armDelete}
           onSubmit={(d) => saveProject(editProject.id, d)}
@@ -792,6 +1027,7 @@ function TopBar({
             onChange={(e) => onProject(e.target.value)}
             className="num max-w-[10rem] rounded-md border border-border bg-surface px-2 py-1 text-xs"
           >
+            <option value={ALL_PROJECTS}>All projects</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </>
@@ -1157,12 +1393,81 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 }
 
 
+/**
+ * The declared plan, next to what the numbers actually say.
+ *
+ * `target_date` and `weekly_hours` would be dead columns if the app only stored
+ * them, so this is the surface that reads them back. Two separate claims, kept
+ * visibly separate: the MEASURED landing date from forecast(), and — only when
+ * there is no velocity to measure — the date the owner's own hours budget
+ * implies. The second is labelled "at N h/wk" precisely so it is never mistaken
+ * for the first.
+ *
+ * Renders nothing at all when neither column is set. A project that declared no
+ * plan should not be given an empty row of dashes implying it failed to.
+ */
+function ProjectPlan({ project, ctx }: { project: Project; ctx: Ctx }) {
+  const measured = I.forecast(ctx.projectTasks, ctx.tasks)
+  const budget = measured.date ? null : I.budgetForecast(ctx.projectTasks, project.weekly_hours)
+  const landing = measured.date ?? budget?.date ?? null
+  const verdict = I.targetVerdict(project.target_date, landing)
+
+  if (!project.target_date && !project.weekly_hours) return null
+
+  return (
+    <p className="num w-full text-xs text-muted">
+      {project.target_date && <>Target {I.shortDate(new Date(`${project.target_date}T17:00:00`).getTime())}</>}
+      {project.target_date && landing && ' · '}
+      {landing && (
+        <>
+          {measured.date ? 'on pace for ' : 'plan lands '}
+          {I.shortDate(landing.getTime())}
+          {budget && <> at {project.weekly_hours} h/wk</>}
+        </>
+      )}
+      {verdict && (
+        <>
+          {' · '}
+          <b className={verdict.tone === 'late' ? 'text-brand' : 'text-foreground'}>{verdict.label}</b>
+        </>
+      )}
+    </p>
+  )
+}
+
 /* ==========================================================================
    LIST
    ========================================================================== */
-function ListView({ ctx, onDeleteProject }: { ctx: Ctx; onDeleteProject: (id: string) => void }) {
+function ListView({ ctx, onEditProject, onDeleteProject }: {
+  ctx: Ctx
+  onEditProject: (id: string) => void
+  onDeleteProject: (id: string) => void
+}) {
   const p = ctx.projects.find((x) => x.id === ctx.activeProject)
   const s = I.stats(ctx.projectTasks)
+  const all = isAllScope(ctx.activeProject)
+
+  /* All scope gets a header of its own rather than a project header with holes
+     in it. Nothing here edits or deletes: there is no single project to act on,
+     and a "Delete project" button under a heading that reads "All projects"
+     is a question nobody should be asked. */
+  if (all) {
+    return (
+      <div className="mx-auto w-full max-w-6xl">
+        <div className="mb-4 flex flex-wrap items-baseline gap-3 border-b border-border pb-3">
+          <h2 className="text-2xl font-semibold tracking-tight">All projects</h2>
+          <p className="num text-xs text-muted">
+            {ctx.projects.length} {ctx.projects.length === 1 ? 'project' : 'projects'} ·{' '}
+            {s.done} of {s.total} done · {s.todo} to do · {s.doing} in progress
+            {s.overdue > 0 && <> · <b className="text-brand">{s.overdue} overdue</b></>}
+          </p>
+        </div>
+        <QuickAdd ctx={ctx} />
+        <BoardColumns ctx={ctx} />
+      </div>
+    )
+  }
+
   if (!p) {
     return <p className="text-sm text-muted">No projects yet — create one from the sidebar.</p>
   }
@@ -1188,13 +1493,27 @@ function ListView({ ctx, onDeleteProject }: { ctx: Ctx; onDeleteProject: (id: st
           {s.done} of {s.total} done · {s.todo} to do · {s.doing} in progress
           {s.overdue > 0 && <> · <b className="text-brand">{s.overdue} overdue</b></>}
         </p>
-        <button
-          type="button"
-          onClick={() => onDeleteProject(p.id)}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground"
-        >
-          <Trash2 size={13} />Delete project
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {/* Editing was previously reachable only from the "+" popover on the
+              sidebar's Projects group — a place nobody looks when they are
+              already reading the project. The page that shows a project is
+              where changing it belongs, next to the button that deletes it. */}
+          <button
+            type="button"
+            onClick={() => onEditProject(p.id)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          >
+            <Pencil size={13} />Edit project
+          </button>
+          <button
+            type="button"
+            onClick={() => onDeleteProject(p.id)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground"
+          >
+            <Trash2 size={13} />Delete project
+          </button>
+        </div>
+        <ProjectPlan project={p} ctx={ctx} />
         {/* Last child with `w-full`, so it takes a row of its own under the
             title rather than pushing the delete button onto a third line. */}
         {p.description && <p className="w-full text-sm text-muted">{p.description}</p>}
@@ -1218,14 +1537,22 @@ function ListView({ ctx, onDeleteProject }: { ctx: Ctx; onDeleteProject: (id: st
 
 /** The heading every page opens with — what you are looking at, then one line
     saying what it means. Same rule and rhythm as ListView's header. */
-function PageHead({ title, lede, project }: {
+function PageHead({ title, lede, project, all }: {
   title: string
   lede: React.ReactNode
   project?: Project | null
+  /** All scope. Named rather than left blank: a page with no scope chip at all
+      reads as "one project, unlabelled", which is the wrong answer. */
+  all?: boolean
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border pb-3">
       <h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
+      {all && (
+        <span className="ui-face rounded-full border border-border px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wider text-muted">
+          All projects
+        </span>
+      )}
       {project && (
         <span className="num flex items-baseline gap-1.5 text-xs text-muted">
           <span
@@ -1282,6 +1609,24 @@ const NoProject = () => (
   <p className="text-sm text-muted">No projects yet — create one from the sidebar.</p>
 )
 
+/**
+ * Which project a row belongs to, as the sidebar's own dot plus the name.
+ *
+ * Rendered ONLY in All scope. Inside one project every row would carry the same
+ * label, which is chrome rather than information; merged, a bare task title is
+ * genuinely ambiguous — two projects can both have a "write the copy".
+ */
+const ProjectMark = ({ project }: { project?: Project | null }) => (
+  <>
+    <span
+      aria-hidden="true"
+      className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle"
+      style={{ background: project ? projectTone(project.color) : 'var(--color-muted)' }}
+    />
+    {project?.name ?? 'no project'} ·{' '}
+  </>
+)
+
 /** A task's priority as the dot the board uses, so the two read alike. */
 const PRIORITY_TONE: Record<string, string> = {
   high: 'var(--color-brand)',
@@ -1301,8 +1646,9 @@ const landing = (f: I.Forecast) =>
    "compared to what?" — with the same numbers for every project at once.
    ========================================================================== */
 function ProgressView({ ctx }: { ctx: Ctx }) {
+  const all = isAllScope(ctx.activeProject)
   const p = ctx.projects.find((x) => x.id === ctx.activeProject)
-  if (!p) return <NoProject />
+  if (!p && !all) return <NoProject />
 
   const s = I.stats(ctx.projectTasks)
   const m = I.momentum(ctx.tasks)
@@ -1323,9 +1669,10 @@ function ProgressView({ ctx }: { ctx: Ctx }) {
       <PageHead
         title="Progress"
         project={p}
+        all={all}
         lede={
           s.total === 0
-            ? 'Nothing filed under this project yet, so there is nothing to measure.'
+            ? 'Nothing filed yet, so there is nothing to measure.'
             : `${s.pct}% done, ${open} still open${s.overdue > 0 ? `, ${s.overdue} overdue` : ''} · ` +
               `${lands === 'no pace' ? 'no measurable pace, so no landing date' : `at this pace it lands ${lands}`}.`
         }
@@ -1440,8 +1787,10 @@ function ProgressView({ ctx }: { ctx: Ctx }) {
    user, and a page is the only place there is room to actually do that.
    ========================================================================== */
 function PrioritiesView({ ctx }: { ctx: Ctx }) {
+  const all = isAllScope(ctx.activeProject)
   const p = ctx.projects.find((x) => x.id === ctx.activeProject)
-  if (!p) return <NoProject />
+  if (!p && !all) return <NoProject />
+  const byId = new Map(ctx.projects.map((x) => [x.id, x]))
 
   const ranked = ctx.projectTasks
     .filter((t) => t.status !== 'done')
@@ -1457,10 +1806,11 @@ function PrioritiesView({ ctx }: { ctx: Ctx }) {
       <PageHead
         title="Priorities"
         project={p}
+        all={all}
         lede={
           top
             ? `${ranked.length} open ${ranked.length === 1 ? 'task' : 'tasks'}, ranked by deadline pressure, stated priority, whether you already started, and how long it has sat.`
-            : `Nothing open in ${p.name}. The queue is the reward.`
+            : `Nothing open in ${all ? 'any project' : p!.name}. The queue is the reward.`
         }
       />
 
@@ -1471,6 +1821,7 @@ function PrioritiesView({ ctx }: { ctx: Ctx }) {
           </p>
           <h3 className="text-lg font-semibold leading-snug sm:text-xl">{top.t.title}</h3>
           <p className="num mt-1 text-xs text-muted">
+            {all && <ProjectMark project={byId.get(top.t.project_id)} />}
             {top.why} · {top.t.priority} priority · score {top.s.toFixed(2)}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -1510,7 +1861,9 @@ function PrioritiesView({ ctx }: { ctx: Ctx }) {
               >
                 {r.t.title}
               </button>
-              <span className="num text-[0.65rem] text-muted">{r.why}</span>
+              <span className="num text-[0.65rem] text-muted">
+                {all && <ProjectMark project={byId.get(r.t.project_id)} />}{r.why}
+              </span>
               <button
                 type="button" onClick={() => act(r.t)}
                 className="ml-auto shrink-0 rounded border border-border px-2 py-0.5 text-[0.65rem] hover:bg-surface-2"
@@ -1700,10 +2053,14 @@ function NotesView({ ctx }: { ctx: Ctx }) {
   const addNote = () => {
     const text = draft.trim()
     if (!text) return
-    commit([{ id: `n${Date.now().toString(36)}`, ts: Date.now(), project: ctx.activeProject, text }, ...notes])
+    // The All sentinel is not a project id, and a note stamped with it would
+    // never match a project filter again. All means "filed under none".
+    const project = isAllScope(ctx.activeProject) ? null : ctx.activeProject
+    commit([{ id: `n${Date.now().toString(36)}`, ts: Date.now(), project, text }, ...notes])
     setDraft('')
   }
 
+  const all = isAllScope(ctx.activeProject)
   const project = ctx.projects.find((x) => x.id === ctx.activeProject) ?? null
   const shown = mine && project ? notes.filter((n) => n.project === project.id) : notes
 
@@ -1712,6 +2069,7 @@ function NotesView({ ctx }: { ctx: Ctx }) {
       <PageHead
         title="Notes"
         project={project}
+        all={all}
         lede={
           notes.length === 0
             ? 'Somewhere to put a thought that is not a task yet. Saved on this device only — not synced to your account.'
@@ -1828,6 +2186,7 @@ function CalendarView({ ctx }: { ctx: Ctx }) {
     byDay.set(k, [...(byDay.get(k) ?? []), t])
   }
   const today = new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+  const byId = new Map(ctx.projects.map((p) => [p.id, p]))
 
   const step = (n: number) => {
     const d = new Date(monthTs); d.setMonth(d.getMonth() + n); setMonthTs(d.getTime())
@@ -1860,13 +2219,25 @@ function CalendarView({ ctx }: { ctx: Ctx }) {
           return (
             <div key={i} className={`min-h-[5.5rem] p-1.5 ${out ? 'bg-background' : 'bg-surface'} ${day.getTime() === today ? 'ring-1 ring-inset ring-brand' : ''}`}>
               <span className="num text-[0.6rem] text-muted">{day.getDate()}</span>
-              {items.slice(0, 3).map((t) => (
-                <button key={t.id} type="button" onClick={() => ctx.setSelected(t.id)}
-                  className={`mt-0.5 block w-full truncate border-l-2 pl-1 text-left text-[0.65rem] leading-tight
-                    ${I.isOverdue(t) ? 'border-brand text-brand' : t.status === 'done' ? 'border-border text-muted line-through' : 'border-border'}`}>
-                  {t.title}
-                </button>
-              ))}
+              {items.slice(0, 3).map((t) => {
+                /* The calendar never was project-scoped — it always merges every
+                   project — so the marker is not gated on the All scope the
+                   other views switch on. It is a dot and a tooltip rather than
+                   a dot and a name because a day cell is one line wide and the
+                   title is the thing that must stay readable. */
+                const proj = byId.get(t.project_id)
+                return (
+                  <button key={t.id} type="button" onClick={() => ctx.setSelected(t.id)}
+                    title={proj ? `${t.title} — ${proj.name}` : t.title}
+                    aria-label={proj ? `${t.title}, ${proj.name}` : t.title}
+                    className={`mt-0.5 flex w-full items-center gap-1 border-l-2 pl-1 text-left text-[0.65rem] leading-tight
+                      ${I.isOverdue(t) ? 'border-brand text-brand' : t.status === 'done' ? 'border-border text-muted line-through' : 'border-border'}`}>
+                    <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{ background: projectTone(proj?.color) }} />
+                    <span className="truncate">{t.title}</span>
+                  </button>
+                )
+              })}
               {items.length > 3 && <span className="num text-[0.6rem] text-muted">+{items.length - 3}</span>}
             </div>
           )

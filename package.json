@@ -1,7 +1,7 @@
 {
   "name": "project-tracker",
   "private": true,
-  "version": "2.6.0",
+  "version": "2.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "build": "npm run archives && tsc -b --noCheck && vite build",
     "build:demo": "node scripts/build-demo.mjs",
     "preview:demo": "npm run build:demo && vite preview --outDir dist-demo",
-    "preview": "vite preview"
+    "preview": "node scripts/preview.mjs"
   },
   "dependencies": {
     "@paper-design/shaders": "^0.0.80",

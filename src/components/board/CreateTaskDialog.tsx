@@ -5,7 +5,7 @@ import * as I from '@/lib/insights'
 import { isoDay } from '@/lib/order'
 import { PriorityPicker, DatePicker } from '@/components/ui/pickers'
 import type { Priority, Task, TaskStatus } from '@/lib/store'
-import type { Ctx } from './shared'
+import { isAllScope, type Ctx } from './shared'
 
 /* ============================================================================
    CREATE TASK DIALOG
@@ -75,7 +75,14 @@ export function CreateTaskDialog({
   const due: string | null = pinDue
     ? pinDue.v
     : parsed.due != null ? isoDay(new Date(parsed.due)) : null
-  const projectId: string | null = pinProject ?? parsed.projectId ?? ctx.activeProject
+  /* In All scope `ctx.activeProject` is the sentinel, which is not a row id —
+     creating against it would file the task under a project that does not
+     exist. It falls back to the first project instead, and the selector below
+     is forced open so the user can see and change where the task is going
+     rather than discovering it later in the wrong column. */
+  const all = isAllScope(ctx.activeProject)
+  const projectId: string | null =
+    pinProject ?? parsed.projectId ?? (all ? ctx.projects[0]?.id ?? null : ctx.activeProject)
   const clean = parsed.title.trim()
 
   /* Reset every time the dialog opens, and remember who opened it. */
@@ -224,7 +231,7 @@ export function CreateTaskDialog({
             </div>
           </div>
 
-          {ctx.projects.length > 1 && (
+          {(all || ctx.projects.length > 1) && (
             <label className="mb-2.5 block">
               <span className={label}>Project</span>
               <select name="project" className={field} value={projectId ?? ''}

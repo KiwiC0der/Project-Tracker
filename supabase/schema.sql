@@ -79,6 +79,27 @@ create table if not exists public.projects (
 
 create index if not exists projects_owner_idx on public.projects (owner_id, position);
 
+-- PLANNING COLUMNS (added after the initial release, hence separate idempotent
+-- ALTERs rather than edits to the create-table above).
+--
+-- `target_date` is the date the OWNER says this should be finished by. The app
+-- already predicts a landing date from measured task velocity (forecast() in
+-- src/lib/insights.ts); a prediction is only actionable next to an intention,
+-- and without this column there is nothing to be late against.
+alter table public.projects add column if not exists target_date date;
+
+-- Hours a week the owner intends to give this project. forecast() has no answer
+-- at all for a project with no completed tasks yet — zero velocity returns
+-- Infinity and the UI has to say "no pace to forecast from" — while stats()
+-- already knows how many hours of work are outstanding. This is the missing
+-- divisor that turns that number into a date on day one.
+--
+-- Nullable on purpose: null means "not budgeted", which is not the same claim
+-- as zero hours a week.
+alter table public.projects
+  add column if not exists weekly_hours int
+  check (weekly_hours is null or weekly_hours between 1 and 168);
+
 -- ----------------------------------------------------------------------------
 -- 3. TASKS
 -- ----------------------------------------------------------------------------

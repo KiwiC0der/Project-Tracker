@@ -105,6 +105,64 @@ export interface Project {
   status: ProjectStatus
   position: number
   created_at: string
+  /** The date the owner says this should be done by. The insights layer already
+      PREDICTS a landing date from measured velocity; a prediction is only
+      actionable next to an intention, and without this there is nothing to be
+      late against. Null means "no target", which is not the same as "today". */
+  target_date?: string | null
+  /** Hours a week the owner intends to give this project. forecast() has no
+      answer at all for a project with nothing finished yet — zero velocity
+      returns Infinity — while stats() already knows how many hours of work are
+      outstanding. This is the missing divisor that yields a date on day one.
+      Null means "not budgeted", which is not a claim of zero. */
+  weekly_hours?: number | null
+}
+
+/* ----------------------------------------------------------------------------
+   PLANNING COLUMNS — target_date and weekly_hours — were added after the app
+   had already been deployed against a live Supabase project, and `schema.sql`
+   is applied BY HAND from the dashboard. So there is a real window in which the
+   code knows about a column the database does not.
+   PostgREST does not ignore an unknown column; it rejects the whole statement
+   with PGRST204, which would take project editing down entirely rather than
+   degrading. Everything below exists to survive that window: the write is
+   retried without these fields, and the user is told once, in a sentence that
+   names the fix, instead of being handed a schema-cache error.
+   -------------------------------------------------------------------------- */
+const PLANNING_COLUMNS = ['target_date', 'weekly_hours'] as const
+
+/** Raised by the retry path so the caller can surface it and carry on. */
+export const MIGRATION_PENDING =
+  'Saved, but the target date and weekly hours were not — your database is ' +
+  'missing those columns. Run supabase/schema.sql in the Supabase SQL editor.'
+
+/** True for the specific failure "this column is not in the schema cache". */
+function isMissingPlanningColumn(err: { code?: string; message?: string } | null) {
+  if (!err) return false
+  if (err.code === 'PGRST204') return true
+  // Older PostgREST builds report the same condition as a plain 42703 with the
+  // column named in the message, so the code alone is not a reliable test.
+  return PLANNING_COLUMNS.some((c) => err.message?.includes(c)) &&
+    /schema cache|does not exist|could not find/i.test(err.message ?? '')
+}
+
+const withoutPlanning = <T extends Record<string, unknown>>(patch: T) => {
+  const rest = { ...patch }
+  for (const c of PLANNING_COLUMNS) delete rest[c]
+  return rest
+}
+
+/* A latch rather than a return value. Both createProject and updateProject can
+   hit the retry path, and threading a second channel through both of their
+   signatures would make every existing call site read as if it handled an error
+   it does not. The scene takes the warning after a write and shows it once. */
+let pendingWarning: string | null = null
+
+/** Read and clear. Returns null when the last write needed no retry. */
+export function takeMigrationWarning(): string | null {
+  const w = pendingWarning
+  pendingWarning = null
+  return w
 }
 
 export interface Task {
@@ -398,21 +456,35 @@ export async function listProjects(): Promise<Project[]> {
   return loadDemo().projects.slice().sort((a, b) => a.position - b.position)
 }
 
+export interface ProjectPlanning {
+  target_date?: string | null
+  weekly_hours?: number | null
+}
+
 export async function createProject(
   name: string,
   description = '',
   color = 'violet',
   status: ProjectStatus = 'active',
+  planning: ProjectPlanning = {},
 ) {
   if (supabase) {
     const { data: auth } = await supabase.auth.getUser()
     if (!auth.user) throw new Error('Not signed in.')
     const existing = await listProjects()
-    const { data, error } = await supabase
-      .from('projects')
-      .insert({ name, description, color, status, owner_id: auth.user.id, position: existing.length })
-      .select()
-      .single()
+    const row = {
+      name, description, color, status,
+      owner_id: auth.user.id,
+      position: existing.length,
+      target_date: planning.target_date ?? null,
+      weekly_hours: planning.weekly_hours ?? null,
+    }
+    let { data, error } = await supabase.from('projects').insert(row).select().single()
+    if (isMissingPlanningColumn(error)) {
+      pendingWarning = MIGRATION_PENDING
+      ;({ data, error } = await supabase
+        .from('projects').insert(withoutPlanning(row)).select().single())
+    }
     if (error) throw new Error(error.message)
     return data as Project
   }
@@ -426,6 +498,8 @@ export async function createProject(
     status,
     position: db.projects.length,
     created_at: new Date().toISOString(),
+    target_date: planning.target_date ?? null,
+    weekly_hours: planning.weekly_hours ?? null,
   }
   db.projects.push(p)
   saveDemo(db)
@@ -434,7 +508,17 @@ export async function createProject(
 
 export async function updateProject(id: string, patch: Partial<Project>) {
   if (supabase) {
-    const { error } = await supabase.from('projects').update(patch).eq('id', id)
+    let { error } = await supabase.from('projects').update(patch).eq('id', id)
+    if (isMissingPlanningColumn(error)) {
+      pendingWarning = MIGRATION_PENDING
+      const rest = withoutPlanning(patch as Record<string, unknown>)
+      // A patch that was ONLY planning fields has nothing left to send, and an
+      // empty PostgREST update is itself an error — so the retry is skipped
+      // rather than swapped for a different failure.
+      error = Object.keys(rest).length
+        ? (await supabase.from('projects').update(rest).eq('id', id)).error
+        : null
+    }
     if (error) throw new Error(error.message)
     return
   }

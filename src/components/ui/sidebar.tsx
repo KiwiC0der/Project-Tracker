@@ -225,7 +225,17 @@ export const SidebarMenu = ({ children }: { children: ReactNode }) => (
   <ul className="flex flex-col gap-1">{children}</ul>
 )
 
-export const SidebarMenuItem = ({ children }: { children: ReactNode }) => <li>{children}</li>
+/** Takes li attributes so a caller can hang layout and a `data-` hook off the
+    row itself. The sidebar's reorderable project list needs both: the drag
+    hit-tests against the <li> rects, and a wrapper div inside the <li> would
+    have made the flex row a second element to keep in sync. */
+export const SidebarMenuItem = ({
+  children,
+  className,
+  ...props
+}: { children: ReactNode } & React.LiHTMLAttributes<HTMLLIElement>) => (
+  <li className={className} {...props}>{children}</li>
+)
 
 const menuButton = cva(
   'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors outline-none',

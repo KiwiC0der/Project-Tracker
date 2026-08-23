@@ -145,6 +145,30 @@ Without Supabase credentials the app runs in **demo mode**: accounts and tasks a
 stored in `localStorage` on your own device, so you can explore the whole UI
 without a backend. A banner makes it obvious when demo mode is active.
 
+### Previewing a build
+
+`npm run build` bakes the real Supabase credentials from `.env` into `dist/`, so
+that bundle is the production app pointed at production data — signing up in it
+creates a **real account in the real project**. For anything interactive, use the
+demo bundle:
+
+```bash
+npm run preview:demo
+```
+
+That builds to `dist-demo/` with the Supabase vars cleared, then verifies the
+output contains neither the project ref nor a JWT before serving it.
+
+`npm run preview` is guarded: it refuses to serve a `dist/` carrying live
+credentials. Override it only to sanity-check a real build before deploying:
+
+```bash
+ALLOW_LIVE_PREVIEW=1 npm run preview
+```
+
+The guard cannot cover `npx vite preview --outDir dist`, which bypasses the npm
+script entirely — reach for `preview:demo` by habit.
+
 ## Connecting Supabase
 
 `.env` is not committed, so a fresh clone starts in demo mode. To run against a

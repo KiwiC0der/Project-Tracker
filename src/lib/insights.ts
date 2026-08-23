@@ -153,6 +153,61 @@ export function forecast(scope: Task[], all: Task[] = scope): Forecast {
   }
 }
 
+/**
+ * The same question as forecast(), asked of a project that has not finished
+ * anything yet.
+ *
+ * forecast() measures velocity from completed work, so a project on its first
+ * week returns Infinity and the UI can only shrug. But stats() already knows
+ * how many hours of work are outstanding, and `weekly_hours` is the owner's
+ * declared budget — the missing divisor. This is an INTENTION-based estimate,
+ * not a measured one, and callers must label it as such: presenting a plan as
+ * a measurement is how a forecast stops being trusted.
+ *
+ * Returns null when there is nothing to divide by, rather than a fake date.
+ */
+export function budgetForecast(tasks: Task[], weeklyHours: number | null | undefined) {
+  if (!weeklyHours || weeklyHours <= 0) return null
+  const s = stats(tasks)
+  if (s.total === s.done) return null
+  if (s.hoursLeft <= 0) return null
+  const days = Math.ceil((s.hoursLeft / weeklyHours) * 7)
+  return { days, date: new Date(Date.now() + days * DAY), hoursLeft: s.hoursLeft }
+}
+
+export interface TargetVerdict {
+  /** Days between the target and the expected landing. Negative = early. */
+  slip: number
+  tone: 'ahead' | 'tight' | 'late'
+  label: string
+}
+
+/**
+ * A declared target only earns its column by being compared to something. This
+ * puts the owner's date next to the expected one and names the gap.
+ *
+ * `landing` is null whenever there is no basis for a date at all — no velocity
+ * and no budget — and this returns null too rather than declaring a project
+ * "on track" on the strength of knowing nothing about it.
+ */
+export function targetVerdict(
+  target: string | null | undefined,
+  landing: Date | null,
+): TargetVerdict | null {
+  if (!target || !landing) return null
+  // Parsed the same way dueAt() parses a task's date — bare `new Date('...')`
+  // on a yyyy-mm-dd string is UTC midnight, which lands on the previous day for
+  // anyone west of Greenwich and would report a slip that does not exist.
+  const want = new Date(`${target}T17:00:00`).getTime()
+  if (Number.isNaN(want)) return null
+  const slip = Math.round((landing.getTime() - want) / DAY)
+  // A day either side of the target is noise, not a slip: both dates are
+  // whole-day estimates and rounding alone can produce a one-day gap.
+  if (slip <= -2) return { slip, tone: 'ahead', label: `${Math.abs(slip)}d ahead of target` }
+  if (slip <= 1) return { slip, tone: 'tight', label: 'on target' }
+  return { slip, tone: 'late', label: `${slip}d past target` }
+}
+
 /** 0 = touched today, 1 = abandoned. The first week is deliberately cheap. */
 export function staleness(t: Task): number {
   if (t.status === 'done') return 0
