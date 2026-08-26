@@ -912,7 +912,6 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
           onProject={setActiveProject}
           appearance={appearance}
           onAppearance={setAppearance}
-          tasks={tasks}
         />
 
         <main className="flex min-h-0 flex-1 flex-col">
@@ -997,7 +996,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
    TOP BAR
    ========================================================================== */
 function TopBar({
-  view, projects, activeProject, onProject, appearance, onAppearance, tasks,
+  view, projects, activeProject, onProject, appearance, onAppearance,
 }: {
   view: View
   projects: Project[]
@@ -1005,14 +1004,7 @@ function TopBar({
   onProject: (id: string) => void
   appearance: Appearance
   onAppearance: (a: Appearance) => void
-  tasks: Task[]
 }) {
-  const s = I.stats(tasks)
-  const avg = projects.length
-    ? projects.reduce((a, p) => a + I.health(tasks.filter((t) => t.project_id === p.id)), 0) / projects.length
-    : 1
-  const conditions = avg > 0.72 ? 'Clear' : avg > 0.55 ? 'Fair' : avg > 0.42 ? 'Unsettled' : 'Heavy weather'
-
   return (
     <header className="sticky top-0 z-30 flex h-14 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-background/85 px-3 backdrop-blur-md">
       <SidebarTrigger />
@@ -1035,10 +1027,11 @@ function TopBar({
 
       <span className="flex-1" />
 
-      <span className="num hidden text-[0.65rem] uppercase tracking-wider text-muted sm:inline">
-        {conditions} · {s.overdue} overdue · {s.hoursLeft}h left
-      </span>
-
+      {/* No weather strip here any more. It reported three numbers nobody had
+          asked for, in a bar whose job is to say where you are and let you
+          change it — and the same figures are on the Progress panel and page,
+          under headings that explain them. A summary you cannot act on, pinned
+          next to the controls, is just noise between you and the controls. */}
       <DayNightSwitch appearance={appearance} onAppearance={onAppearance} />
       <AppearanceMenu appearance={appearance} onAppearance={onAppearance} />
 
@@ -1474,7 +1467,15 @@ function ListView({ ctx, onEditProject, onDeleteProject }: {
   return (
     <div className="mx-auto w-full max-w-6xl">
       <div className="mb-4 flex flex-wrap items-baseline gap-3 border-b border-border pb-3">
-        <h2 className="flex items-baseline gap-2 text-2xl font-semibold tracking-tight">
+        {/* The description hangs off the title rather than occupying a line of
+            its own. It is reference you set once and re-read rarely, and as a
+            full-width paragraph it pushed the board down the page on every
+            visit to say something you already knew. `title` keeps it one hover
+            away, and Edit project is where it is actually changed. */}
+        <h2
+          title={p.description || undefined}
+          className="flex items-baseline gap-2 text-2xl font-semibold tracking-tight"
+        >
           <span
             aria-hidden="true"
             className="h-2.5 w-2.5 shrink-0 self-center rounded-full"
@@ -1513,10 +1514,9 @@ function ListView({ ctx, onEditProject, onDeleteProject }: {
             <Trash2 size={13} />Delete project
           </button>
         </div>
-        <ProjectPlan project={p} ctx={ctx} />
         {/* Last child with `w-full`, so it takes a row of its own under the
-            title rather than pushing the delete button onto a third line. */}
-        {p.description && <p className="w-full text-sm text-muted">{p.description}</p>}
+            title rather than pushing the buttons onto a third line. */}
+        <ProjectPlan project={p} ctx={ctx} />
       </div>
       <QuickAdd ctx={ctx} />
       <BoardColumns ctx={ctx} />

@@ -1,0 +1,51 @@
+Copyright (c) 2026 Anteneh D. All rights reserved.
+
+SOURCE-AVAILABLE, NOT OPEN SOURCE
+---------------------------------
+
+This source code is published for reading, learning and review. It is not
+licensed for reuse.
+
+You MAY:
+
+  - view, read and study this source code;
+  - fork the repository on GitHub and keep a copy for your own reference;
+  - quote short excerpts with attribution, for commentary, teaching or review;
+  - open issues and submit pull requests to this repository. By submitting a
+    contribution you grant the copyright holder a perpetual, worldwide,
+    irrevocable, royalty-free licence to use it, including in a commercial
+    product, and you confirm you have the right to grant that.
+
+You MAY NOT, without prior written permission from the copyright holder:
+
+  - use this code, in whole or in part, in any other project, whether personal,
+    academic, internal or commercial;
+  - redistribute, sublicense, sell or host it;
+  - create or operate a derivative work or a competing service from it;
+  - remove or alter this notice.
+
+WHY THIS RATHER THAN MIT OR APACHE-2.0
+--------------------------------------
+
+Those licences are irrevocable for the version they were applied to: publishing
+one release under MIT permits commercial use of that release permanently, and
+re-licensing later cannot withdraw it. This project may be commercialised, so
+that door is deliberately left shut. A file saying nothing would have the same
+legal effect by default — every right reserved — but it leaves readers guessing
+whether that was intended, so this states it.
+
+If you want to use any of this, ask. Permission is likely and free for
+non-commercial use; it just has to be granted rather than assumed.
+
+NO WARRANTY
+-----------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Third-party dependencies remain under their own licences; see package.json and
+the notices in node_modules.

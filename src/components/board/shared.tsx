@@ -333,11 +333,19 @@ const Insertion = () => (
  * The name and props are unchanged, because two scenes render this.
  * `placeholder` now names the button — a panel that wants "Capture" instead of
  * "New task" keeps working.
+ *
+ * No token hint under the button. The dialog states the tokens itself, in the
+ * field they act on, at the moment you are typing into it — a second copy out
+ * here was the same sentence twice, and the one further from the input is the
+ * one that reads as clutter.
  */
 export function QuickAdd({ ctx, placeholder }: { ctx: Ctx; placeholder?: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <div>
+    /* The gap is explicit now. It used to come from the token-hint line sitting
+       under the button; with that gone the button's glow ran straight into the
+       column headings. */
+    <div className="mb-3">
       <LiquidMetalButton
         label={placeholder ?? 'New task'}
         icon={<Plus size={14} />}
@@ -345,7 +353,6 @@ export function QuickAdd({ ctx, placeholder }: { ctx: Ctx; placeholder?: string 
         aria-expanded={open}
         onClick={() => setOpen(true)}
       />
-      <p className="num mt-1.5 text-[0.65rem] text-muted">!high · @fri · /project still work</p>
       {/* Portals itself to <body>: this panel is overflow-hidden. */}
       <CreateTaskDialog ctx={ctx} open={open} onClose={() => setOpen(false)} />
     </div>

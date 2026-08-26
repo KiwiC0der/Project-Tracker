@@ -10,6 +10,11 @@ dist-verify/
 public/v/
 .archive/
 
+# Raw audit output, and any finding that is still exploitable. This repo is
+# public: a live finding committed here is an attacker's to-do list, hosted.
+# Fixed findings graduate to docs/audits/ — see docs/audits/README.md.
+.audit/
+
 # Never commit real credentials — .env.example is the tracked template.
 .env
 .env.local
