@@ -148,6 +148,28 @@ create trigger tasks_touch before update on public.tasks
 -- ----------------------------------------------------------------------------
 -- This is what makes it safe to ship the anon key in the browser bundle.
 -- Without these policies, the anon key would expose every row to everyone.
+--
+-- THREE RULES, and every policy below obeys all three. They are not style.
+--
+--   1. Name the role with `to authenticated`. A policy with no role clause is
+--      evaluated for EVERY role including `anon`, so an unauthenticated request
+--      still runs the predicate. It fails closed today only because
+--      `auth.uid()` is null for anon and null never equals a uuid — the safety
+--      is a coincidence of the expression, not something the policy states.
+--
+--   2. Wrap it as `(select auth.uid())`. Bare `auth.uid()` is volatile to the
+--      planner and re-evaluates once PER ROW; wrapped in a scalar subquery it
+--      becomes an initPlan, evaluated once per statement. On a full-table scan
+--      that is the difference between one call and one call per row.
+--
+--   3. An UPDATE's `with check` must be at least as strict as the matching
+--      INSERT's `with check`. If INSERT validates a column and UPDATE does not,
+--      the column is writable to any value after creation and the INSERT
+--      validation is decorative. `tasks` is the case that matters here: a task
+--      is only insertable into a project you own, so it must only be updatable
+--      into one too. Verify with supabase/tests/rls-adversarial.sql, which
+--      attacks the boundary rather than reading it — reading it is what let the
+--      two drift apart in the first place.
 alter table public.profiles enable row level security;
 alter table public.projects enable row level security;
 alter table public.tasks    enable row level security;
@@ -155,51 +177,97 @@ alter table public.tasks    enable row level security;
 -- profiles: you can only see and edit your own
 drop policy if exists "profiles_select_own" on public.profiles;
 create policy "profiles_select_own" on public.profiles
-  for select using (auth.uid() = id);
+  for select to authenticated using ((select auth.uid()) = id);
 
 drop policy if exists "profiles_update_own" on public.profiles;
 create policy "profiles_update_own" on public.profiles
-  for update using (auth.uid() = id) with check (auth.uid() = id);
+  for update to authenticated
+  using ((select auth.uid()) = id)
+  with check ((select auth.uid()) = id);
+
+-- No INSERT policy, deliberately: rows are created solely by the
+-- `handle_new_user` trigger, which is `security definer` and therefore bypasses
+-- RLS. A client has no legitimate reason to insert one.
+-- No DELETE policy either — a profile dies with its auth.users row via
+-- `on delete cascade`. Self-service account deletion is tracked separately as
+-- a GDPR Art. 17 gap; when it lands it needs a policy here, not a client delete.
 
 -- projects: full CRUD, scoped to the owner
 drop policy if exists "projects_select_own" on public.projects;
 create policy "projects_select_own" on public.projects
-  for select using (auth.uid() = owner_id);
+  for select to authenticated using ((select auth.uid()) = owner_id);
 
 drop policy if exists "projects_insert_own" on public.projects;
 create policy "projects_insert_own" on public.projects
-  for insert with check (auth.uid() = owner_id);
+  for insert to authenticated with check ((select auth.uid()) = owner_id);
 
 drop policy if exists "projects_update_own" on public.projects;
 create policy "projects_update_own" on public.projects
-  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+  for update to authenticated
+  using ((select auth.uid()) = owner_id)
+  -- `with check` on owner_id is what stops a client giving its project away,
+  -- or claiming someone else's by rewriting the column.
+  with check ((select auth.uid()) = owner_id);
 
 drop policy if exists "projects_delete_own" on public.projects;
 create policy "projects_delete_own" on public.projects
-  for delete using (auth.uid() = owner_id);
+  for delete to authenticated using ((select auth.uid()) = owner_id);
 
 -- tasks: same, plus the project must also belong to you
 drop policy if exists "tasks_select_own" on public.tasks;
 create policy "tasks_select_own" on public.tasks
-  for select using (auth.uid() = owner_id);
+  for select to authenticated using ((select auth.uid()) = owner_id);
 
 drop policy if exists "tasks_insert_own" on public.tasks;
 create policy "tasks_insert_own" on public.tasks
-  for insert with check (
-    auth.uid() = owner_id
+  for insert to authenticated with check (
+    (select auth.uid()) = owner_id
     and exists (
       select 1 from public.projects p
-      where p.id = project_id and p.owner_id = auth.uid()
+      where p.id = project_id and p.owner_id = (select auth.uid())
     )
   );
 
 drop policy if exists "tasks_update_own" on public.tasks;
 create policy "tasks_update_own" on public.tasks
-  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+  for update to authenticated
+  -- USING selects which existing rows may be updated: ownership of the row.
+  using ((select auth.uid()) = owner_id)
+  -- WITH CHECK validates the row AFTER the update, and mirrors the INSERT
+  -- policy exactly — see rule 3 above. The `exists` clause is what keeps
+  -- `project_id` from being a freely writable pointer.
+  --
+  -- Deliberately NOT added to USING as well. USING gates which rows you may
+  -- touch, and a task already pointing at a project you do not own is exactly
+  -- the row you would need to update in order to repair it.
+  with check (
+    (select auth.uid()) = owner_id
+    and exists (
+      select 1 from public.projects p
+      where p.id = project_id and p.owner_id = (select auth.uid())
+    )
+  );
 
 drop policy if exists "tasks_delete_own" on public.tasks;
 create policy "tasks_delete_own" on public.tasks
-  for delete using (auth.uid() = owner_id);
+  for delete to authenticated using ((select auth.uid()) = owner_id);
+
+-- Rule 2 is only worth anything if the columns the policies filter on are
+-- indexed. owner_id is the predicate in every policy here, and it is already
+-- covered: `projects_owner_idx (owner_id, position)` and `tasks_owner_idx
+-- (owner_id)` both lead with it, and `profiles` filters on its primary key.
+-- No index is added here on purpose — a second index on a column that already
+-- leads an existing one buys nothing and costs write throughput.
+--
+-- One index that is NOT about RLS: `profiles.username` is the human-facing
+-- identity, is looked up by it, and has neither an index nor a constraint.
+-- Uniqueness is currently enforced only indirectly, via the unique constraint
+-- on auth.users.email through the synthesized address — an invariant kept in
+-- two places at once. This index makes the lookup cheap; making it UNIQUE is a
+-- separate decision, because a unique index would FAIL to apply if any
+-- duplicate already exists, and that must be checked before it is imposed.
+create index if not exists profiles_username_lower_idx
+  on public.profiles (lower(username));
 
 -- ----------------------------------------------------------------------------
 -- 6. Starter content for brand-new accounts
