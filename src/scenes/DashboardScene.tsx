@@ -14,7 +14,7 @@ import { usePopover, PopoverPortal, pushEscape, refocus, PANEL as POPOVER } from
 import {
   listProjects, listTasks, createProject, createTask, updateTask, deleteTask,
   deleteProject, updateProject, seedIfEmpty, signOut, usingRealBackend, applyOrder,
-  takeMigrationWarning,
+  takeMigrationWarning, humanError,
   type Project, type Task, type TaskStatus, type User,
 } from '@/lib/store'
 import * as I from '@/lib/insights'
@@ -35,6 +35,7 @@ import {
   ProjectDialog, projectTone, PROJECT_STATUSES, type ProjectDraft,
 } from '@/components/board/ProjectDialog'
 import { BoardColumns, QuickAdd, Burndown, ALL_PROJECTS, isAllScope, type Ctx } from '@/components/board/shared'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 
 type View =
   | 'dashboard' | 'list' | 'progress' | 'priorities' | 'stale' | 'notes'
@@ -504,7 +505,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
         setTasks(ts)
         setActiveProject(ps[0]?.id ?? null)
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load data.')
+        if (!cancelled) setError(humanError(err, 'Failed to load data.'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -530,7 +531,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       await updateTask(id, p)
     } catch (err) {
       setTasks(prev)
-      setError(err instanceof Error ? err.message : 'Could not save that change.')
+      setError(humanError(err, 'Could not save that change.'))
     }
   }, [tasks])
 
@@ -572,7 +573,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       }
     } catch (err) {
       setTasks(prev)
-      setError(err instanceof Error ? err.message : 'Could not move that task.')
+      setError(humanError(err, 'Could not move that task.'))
     }
   }, [tasks, projects])
 
@@ -613,12 +614,12 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
           await updateTask(back.id, rest)
           setTasks((cur) => [...cur, { ...back, ...rest }])
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Could not restore that task.')
+          setError(humanError(err, 'Could not restore that task.'))
         }
       })
     } catch (err) {
       setTasks(prev)
-      setError(err instanceof Error ? err.message : 'Could not delete that task.')
+      setError(humanError(err, 'Could not delete that task.'))
     }
   }, [tasks, selected])
 
@@ -651,7 +652,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       }
       return t
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create that task.')
+      setError(humanError(err, 'Could not create that task.'))
       return null
     }
   }, [projects, activeProject])
@@ -679,7 +680,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       return null
     } catch (err) {
       setProjects(prev)
-      const msg = err instanceof Error ? err.message : 'Could not save that project.'
+      const msg = humanError(err, 'Could not save that project.')
       setError(msg)
       return msg
     }
@@ -717,7 +718,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       await Promise.all(writes.map((w) => updateProject(w.id, { position: w.position })))
     } catch (err) {
       setProjects(prev)
-      setError(err instanceof Error ? err.message : 'Could not reorder your projects.')
+      setError(humanError(err, 'Could not reorder your projects.'))
     }
   }, [projects])
 
@@ -745,7 +746,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       notify.success(`Created "${p.name}"`)
       return null
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not create that project.'
+      const msg = humanError(err, 'Could not create that project.')
       // Shown inline in the dialog, and left in the scene banner so it survives
       // the user giving up and closing it.
       setError(msg)
@@ -776,7 +777,7 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
       notify.success(`Deleted "${doomed?.name ?? 'project'}"`)
       return null
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not delete that project.'
+      const msg = humanError(err, 'Could not delete that project.')
       setError(msg)
       return msg
     }
@@ -924,29 +925,41 @@ function DashboardInner({ user, onSignOut }: { user: User; onSignOut: () => void
             </div>
           )}
 
-          {loading ? (
-            <div className="flex flex-1 items-center justify-center text-muted">
-              <Loader2 className="animate-spin" />
-            </div>
-          ) : view === 'dashboard' ? (
-            <Workboard ctx={ctx} />
-          ) : (
-            <div className="scene-enter flex-1 overflow-auto p-4 sm:p-6">
-              {view === 'list' && (
-                <ListView ctx={ctx} onEditProject={setEditingProject} onDeleteProject={askDeleteProject} />
-              )}
-              {view === 'progress' && <ProgressView ctx={ctx} />}
-              {view === 'priorities' && <PrioritiesView ctx={ctx} />}
-              {view === 'stale' && <StaleView ctx={ctx} />}
-              {view === 'notes' && <NotesView ctx={ctx} />}
-              {view === 'calendar' && <CalendarView ctx={ctx} />}
-              {view === 'reports' && <ReportsView ctx={ctx} />}
-              {view === 'versions' && <VersionsView />}
-              {view === 'settings' && (
-                <SettingsView appearance={appearance} onAppearance={setAppearance} ctx={ctx} />
-              )}
-            </div>
-          )}
+          {/* Inside <main>, not around the whole scene, so a view that throws
+              leaves the sidebar and top bar standing — which means the way out
+              is switching to another view or signing out, not reloading. The
+              root boundary in main.tsx is still behind this one for anything
+              that breaks the chrome itself.
+
+              Keyed on `view` because a boundary that has caught stays caught:
+              without the key, navigating away from a broken view would keep
+              showing that view's fallback over the new view's content. The key
+              remounts it, so leaving the view is itself the recovery. */}
+          <ErrorBoundary key={view}>
+            {loading ? (
+              <div className="flex flex-1 items-center justify-center text-muted">
+                <Loader2 className="animate-spin" />
+              </div>
+            ) : view === 'dashboard' ? (
+              <Workboard ctx={ctx} />
+            ) : (
+              <div className="scene-enter flex-1 overflow-auto p-4 sm:p-6">
+                {view === 'list' && (
+                  <ListView ctx={ctx} onEditProject={setEditingProject} onDeleteProject={askDeleteProject} />
+                )}
+                {view === 'progress' && <ProgressView ctx={ctx} />}
+                {view === 'priorities' && <PrioritiesView ctx={ctx} />}
+                {view === 'stale' && <StaleView ctx={ctx} />}
+                {view === 'notes' && <NotesView ctx={ctx} />}
+                {view === 'calendar' && <CalendarView ctx={ctx} />}
+                {view === 'reports' && <ReportsView ctx={ctx} />}
+                {view === 'versions' && <VersionsView />}
+                {view === 'settings' && (
+                  <SettingsView appearance={appearance} onAppearance={setAppearance} ctx={ctx} />
+                )}
+              </div>
+            )}
+          </ErrorBoundary>
         </main>
       </div>
 

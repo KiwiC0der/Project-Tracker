@@ -1,0 +1,155 @@
+# =============================================================================
+# SECURITY HEADERS for the Cloudflare Workers static-assets deploy.
+#
+# There is no Worker script in this project — wrangler.jsonc serves ./dist
+# straight from the assets runtime — so this file is the ONLY place response
+# headers can be set. It lives in public/ because Vite copies public/ verbatim
+# into dist/, and the assets runtime looks for _headers at the root of the
+# asset directory. Cloudflare parses it and does not serve it, so it never
+# appears at https://pt.anteneh.tech/_headers.
+#
+# Before this file existed the app sent no security headers at all. The one
+# that actually mattered: with no frame-ancestors and no X-Frame-Options, the
+# sign-in page could be framed by any site on the internet, so a page could
+# overlay an invisible copy of it and harvest a username and password from a
+# user who thought they were clicking something else.
+#
+# --- THINGS THE PARSER DOES THAT WILL BITE YOU ------------------------------
+#
+#   * Lines beginning with `#` and blank lines are skipped and do not count
+#     against the 100-rule limit. Comment freely.
+#   * Each line has a 2,000-character limit, counted after trimming and
+#     INCLUDING the header name. A line over the limit is not truncated — it
+#     is dropped, and the header simply never ships. The CSP line below is the
+#     only one anywhere near it; if you extend it, count the characters.
+#   * When two rules both match a request, their headers are UNIONED, and a
+#     header named by both is joined with a comma. For most headers that is
+#     harmless. For CSP it is not: `Content-Security-Policy: A, B` is two
+#     policies, and the browser enforces BOTH — the intersection, not the
+#     union. So a per-directory rule cannot loosen the CSP set on /*, it can
+#     only tighten it. That is why there is exactly one CSP rule in this file
+#     and the /explorations/ hashes live inside it, rather than in a rule of
+#     their own. (`! Content-Security-Policy` detaches instead of joining, but
+#     detach-then-reattach across rules is not documented behaviour and is not
+#     worth betting the app's script policy on.)
+#   * These headers are attached to static-asset responses only. If a Worker
+#     script is ever added in front of the assets, it must set them itself.
+#
+# --- VERIFY AFTER DEPLOYING -------------------------------------------------
+#
+#   curl -sI https://pt.anteneh.tech/ | grep -i -E \
+#     'content-security|strict-transport|x-content-type|referrer|permissions|cross-origin'
+#
+# Nothing in this file takes effect locally. `vite preview` does not read it,
+# and the only way to know it works is to look at a real response.
+# =============================================================================
+
+
+/*
+  # -- Clickjacking, and why not X-Frame-Options ----------------------------
+  # frame-ancestors is the modern control and does everything XFO did plus
+  # allow-lists. XFO's ALLOW-FROM was never implemented outside IE/Edge-legacy,
+  # and every browser this app supports honours frame-ancestors. Note that
+  # frame-ancestors is IGNORED in a report-only policy, which is the whole
+  # reason there is an enforcing CSP below as well as a report-only one: a
+  # report-only rollout would have left the sign-in page framable for the
+  # length of the rollout.
+  #
+  # -- Why an enforcing policy AND a report-only one ------------------------
+  # The enforcing header carries only the three directives that constrain
+  # *navigation and framing* and cannot block a resource from loading, so it
+  # cannot break the app no matter what the app turns out to fetch:
+  #   base-uri     — a <base> tag injected by an XSS can silently repoint every
+  #                  relative script URL at an attacker's host. Nothing here
+  #                  sets <base>, so 'self' costs nothing.
+  #   form-action  — there is no cross-origin form post in this app; auth goes
+  #                  over fetch. 'self' stops an injected form exfiltrating a
+  #                  password to another origin.
+  #   frame-ancestors — the fix described above.
+  # The full policy — the one that constrains script-src, and therefore the one
+  # that can actually break the app — ships as Report-Only first. Violations
+  # show up in the browser console (and would POST to a report-uri if a
+  # collector is ever added) without anything being blocked. Once a real deploy
+  # has been driven through sign-up, the board, toasts and the shader hero with
+  # zero violations reported, swap the two: move the Report-Only value into
+  # Content-Security-Policy and delete both the minimal enforcing policy and
+  # the report-only header. The full policy was measured against the built
+  # bundle locally with zero violations, but local measurement is not a deploy.
+  Content-Security-Policy: base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy-Report-Only: default-src 'none'; script-src 'self' 'sha256-G431IXfriGRaIPqIpTVfJbDzve9ACsOOeIvY88td/1A=' 'sha256-GQBEWZzO5EWFCmhq19+8SJWT4u9jKgj3h8/pfEMOsnQ=' 'sha256-xm+IAGpZHbcx0KG4fPl/I7ZoAAkSiLsgh/8gxBAtjDA=' 'sha256-cYrIE+M0EFClL9DAxXDikOu8tRF4/uN73Wo3ikhvfk8=' 'sha256-Q46UBqWfzolFI+J7FoXzu/koKQ2v5rmwM0UkAIIQU3E=' 'sha256-R1JnSo9bonf2ZegBEqx2gqZH4uEtrQvGCXJ0vk+a/Hc=' 'sha256-w0prwOEP4SM5VXxXI4uwGaqcw5MnWA7sVji3aYqqSS8=' 'sha256-6HPWnwL8hbTRvBQgTivN4H7IwdeQuVsGCpBj/pRXVEE=' 'sha256-uniGGYzkVLiBM+R/qLcGPZzdasieewQMgQI06f57C7A=' 'sha256-04oTNag7LHZd83xpzh3ExfRSRKD9LdAsoFvgY433qIw=' 'sha256-mQoubYoS6KQcAUOgS7Yfis1PDgShLim+YwdEQzWU368='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests
+
+  # -- MIME sniffing ---------------------------------------------------------
+  # Without this a browser may ignore Content-Type and guess. The failure mode
+  # that matters here is /v/*: ten archived builds of this app are served from
+  # this origin, and anything a sniffing browser decides is script runs with
+  # full access to the live app's localStorage — including the Supabase session.
+  X-Content-Type-Options: nosniff
+
+  # -- Referrer --------------------------------------------------------------
+  # strict-origin-when-cross-origin: full URL to ourselves, bare origin to
+  # other sites, nothing at all on an HTTPS->HTTP downgrade. The app links out
+  # to GitHub; those links should not carry the path the user was on.
+  Referrer-Policy: strict-origin-when-cross-origin
+
+  # -- Cross-origin isolation-ish -------------------------------------------
+  # COOP severs window.opener for anything this page opens or is opened by, so
+  # a page that opened us cannot reach into our window. The outbound links
+  # already carry rel="noreferrer"; this covers the inbound direction too.
+  # CORP stops other origins embedding our assets as <script>/<img>/<link>.
+  # Deliberately NOT setting Cross-Origin-Embedder-Policy: every subresource
+  # here is same-origin so require-corp would probably work, but it is the one
+  # of these three that breaks a page outright when it is wrong, and this app
+  # has no SharedArrayBuffer or high-resolution-timer need that would earn it.
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+
+  # -- HSTS ------------------------------------------------------------------
+  # One year, and includeSubDomains because pt.anteneh.tech has no subdomains
+  # for it to strand — note it constrains *.pt.anteneh.tech only, NOT sibling
+  # subdomains of anteneh.tech, which are a different host's problem.
+  #
+  # `preload` is deliberately absent. max-age is a browser-local memory and
+  # expires; the preload list is compiled into browser binaries and removal
+  # takes months of release cycles. Submitting pt.anteneh.tech is a promise
+  # that this host will speak HTTPS forever, and there is no way to take it
+  # back on the timescale of noticing a mistake. The remaining points that
+  # `preload` would score are not worth an irreversible commitment on a
+  # hobby subdomain.
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+  # -- Permissions-Policy ----------------------------------------------------
+  # Enumerated from what the app actually calls, not from a copied list. A
+  # grep of src/ for browser APIs finds localStorage, sessionStorage,
+  # matchMedia and navigator.clipboard.writeText — and nothing else. So every
+  # powerful feature below is denied outright, including in embedded frames.
+  #
+  # clipboard-write is NOT denied: src/components/ErrorBoundary.tsx copies the
+  # crash report with navigator.clipboard.writeText, and denying it would turn
+  # the one useful control on the crash screen into a dead button.
+  #
+  # If the app ever gains a WebXR or camera feature, the symptom of forgetting
+  # this line is a permission prompt that never appears.
+  Permissions-Policy: accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), browsing-topics=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), gamepad=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()
+
+
+# -----------------------------------------------------------------------------
+# /v/* — the archived release builds (see docs/VERSIONING.md).
+#
+# Each of these is a complete older copy of this app, served from the live
+# origin. Two consequences worth separating:
+#
+#   1. SEARCH. Ten near-identical copies of the app compete with the real one
+#      for the same queries, and a search result pointing at /v/2.1.0/ hands a
+#      visitor a build that is months out of date. noindex fixes that half.
+#
+#   2. NOT FIXED BY THIS FILE. Those builds run old code against the CURRENT
+#      database with the current anon key. A bug fixed in the app is still
+#      reachable at /v/<old>/, and being unindexed is not the same as being
+#      unreachable. That is a deployment-shape question, not a headers one —
+#      see the audit report.
+#
+# X-Robots-Tag is a different header name from anything on /* above, so the
+# comma-join rule does not apply and both rules attach cleanly.
+# -----------------------------------------------------------------------------
+/v/*
+  X-Robots-Tag: noindex

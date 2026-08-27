@@ -136,6 +136,39 @@ export const MIGRATION_PENDING =
   'Saved, but the target date and weekly hours were not — your database is ' +
   'missing those columns. Run supabase/schema.sql in the Supabase SQL editor.'
 
+/**
+ * Turn a thrown error into something worth putting in front of a person.
+ *
+ * Every `throw` below rethrows PostgREST's own message verbatim, and those are
+ * written for whoever wrote the schema, not for whoever is using the app. The
+ * banner in DashboardScene was showing them unedited, so a denied write read
+ * `new row violates row-level security policy for table "tasks"` — which tells
+ * the user nothing they can act on, and tells anyone reading over their
+ * shoulder the table and policy names.
+ *
+ * The default is therefore the CALLER'S fallback, not the raw text: unmatched
+ * messages are dropped rather than shown. That direction is deliberate. A
+ * pass-through default fails open every time a backend phrases something in a
+ * way nobody here anticipated, and the raw string is still in the console and
+ * still in the copied error detail — the two places a maintainer actually
+ * looks. Only the two failures a user can genuinely do something about get
+ * their own wording, and `SAFE_MESSAGES` holds the ones this file authored.
+ */
+export function humanError(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : ''
+  if (!raw) return fallback
+  if (/failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
+    return 'No connection to the server, so that change was not saved.'
+  }
+  if (/row-level security|permission denied|not authori[sz]ed|JWT|token is expired/i.test(raw)) {
+    return 'Your session has expired, or that is not yours to change. Sign out and back in.'
+  }
+  return SAFE_MESSAGES.has(raw) ? raw : fallback
+}
+
+/** Messages thrown by this module rather than relayed from the backend. */
+const SAFE_MESSAGES = new Set(['Not signed in.'])
+
 /** True for the specific failure "this column is not in the schema cache". */
 function isMissingPlanningColumn(err: { code?: string; message?: string } | null) {
   if (!err) return false
@@ -401,7 +434,16 @@ function clearDeviceState() {
 export async function signOut(): Promise<void> {
   clearDeviceState()
   if (supabase) {
-    await supabase.auth.signOut()
+    /* Offline, this rejects. The device state above is already gone by then,
+       so a rejection propagating out would leave the caller's `onSignOut()`
+       unreached: the board stays on screen, signed in to a session that has
+       been half torn down, with nothing said. The local sign-out is the part
+       that matters and it has already happened. */
+    try {
+      await supabase.auth.signOut()
+    } catch {
+      /* nothing to do — the session is cleared locally either way */
+    }
     return
   }
   const db = loadDemo()

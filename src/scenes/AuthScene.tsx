@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { DotMatrixShader } from '@/components/ui/dot-matrix-shader'
-import { signIn, signUp, usingRealBackend, validateUsername, type User } from '@/lib/store'
+import { signIn, signUp, usingRealBackend, validateUsername, humanError, type User } from '@/lib/store'
 import { Loader2, AtSign, Lock, UserRound, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 /** Scene 3 — login / signup. Identity is a username; see store.ts AUTH_EMAIL_DOMAIN. */
@@ -49,7 +49,7 @@ export function AuthScene({ onAuthed }: { onAuthed: (user: User) => void }) {
         onAuthed(result.user)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong.')
+      setError(humanError(err, 'Something went wrong.'))
     } finally {
       setBusy(false)
     }

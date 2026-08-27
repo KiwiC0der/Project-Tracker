@@ -17,6 +17,7 @@
    app falls back to the localStorage demo backend.
    ========================================================================== */
 import { spawnSync } from 'node:child_process'
+import { rmSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { projectRef, scanDist } from './lib/credential-scan.mjs'
@@ -36,6 +37,25 @@ const r = spawnSync(
   },
 )
 if (r.status !== 0) process.exit(r.status ?? 1)
+
+/* Drop the archived releases before scanning, because they can never pass and
+   should never have been here.
+
+   `npm run archives` rebuilds every past git tag into `public/v/<version>/`,
+   each one compiled with the real .env of the day it ran. Vite copies
+   `public/` into the output verbatim, so a demo build that cleared its own env
+   still inherited ten fully credentialed apps under /v/ — and, until the
+   scanner was made recursive, was told it was clean.
+
+   Deleting them is the honest fix rather than exempting them from the scan.
+   The demo bundle exists so the CURRENT app can be clicked around without
+   touching production; a museum of older releases is not part of that job, and
+   keeping it would mean `preview:demo` served live-backed builds at /v/*. */
+const archives = path.join(out, 'v')
+if (existsSync(archives)) {
+  rmSync(archives, { recursive: true, force: true })
+  console.log('demo build: removed /v/ archives (they carry live credentials by design)')
+}
 
 /* Verify rather than assume. A build that silently picked up .env would send
    a tester at the production database, so this refuses to hand over a bundle

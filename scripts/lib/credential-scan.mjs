@@ -24,20 +24,54 @@ export function projectRef(root) {
 }
 
 /**
- * Scan every .js file directly under `<dir>/assets` for live credentials.
- * Returns a list of human-readable descriptions; empty means clean.
+ * Every .js file anywhere under `dir`, not just `<dir>/assets`.
+ *
+ * The non-recursive version was a false negative waiting to happen, and it
+ * found one: `npm run archives` copies a full built app into `public/v/<ver>/`
+ * for every past release, Vite copies `public/` into the output verbatim, and
+ * each of those archived bundles was built with the real .env of its day. So
+ * `dist-demo/v/1.0.0/assets/index-*.js` carries the live project ref while the
+ * top-level `dist-demo/assets/*.js` is genuinely clean — and the scanner
+ * printed "verified free of live credentials" over the top of it.
+ *
+ * The lesson is not "add /v/ to the list". A scanner that checks one directory
+ * cannot make a claim about a tree, and this one's output is read as a claim
+ * about a tree. So it walks the whole thing.
+ */
+function jsFiles(dir) {
+  if (!existsSync(dir)) return []
+  const out = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...jsFiles(full))
+    else if (entry.name.endsWith('.js') || entry.name.endsWith('.html')) out.push(full)
+  }
+  return out
+}
+
+/**
+ * Scan a built output directory for live credentials.
+ * Returns human-readable descriptions; empty means clean.
+ *
+ * `.html` is scanned as well as `.js`: an inline <script> in an archived
+ * index.html would carry a key just as effectively as a bundle chunk.
  */
 export function scanDist(dir, ref) {
-  const assets = path.join(dir, 'assets')
-  const bundles = existsSync(assets)
-    ? readdirSync(assets)
-        .filter((f) => f.endsWith('.js'))
-        .map((f) => readFileSync(path.join(assets, f), 'utf8'))
-    : []
+  const files = jsFiles(dir)
+  const hits = (test) => files.filter((f) => test(readFileSync(f, 'utf8')))
 
   const leaks = []
-  if (ref && bundles.some((b) => b.includes(ref))) leaks.push(`Supabase project ref "${ref}"`)
+  if (ref) {
+    const found = hits((b) => b.includes(ref))
+    if (found.length) {
+      leaks.push(`Supabase project ref "${ref}" in ${found.length} file(s), e.g. ` +
+        path.relative(dir, found[0]))
+    }
+  }
   // Every Supabase anon key is an HS256 JWT; the header encodes to this prefix.
-  if (bundles.some((b) => /eyJhbGciOiJIUzI1NiIs/.test(b))) leaks.push('a JWT anon key')
+  const jwt = hits((b) => /eyJhbGciOiJIUzI1NiIs/.test(b))
+  if (jwt.length) {
+    leaks.push(`a JWT anon key in ${jwt.length} file(s), e.g. ` + path.relative(dir, jwt[0]))
+  }
   return leaks
 }
