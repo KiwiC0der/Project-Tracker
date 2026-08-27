@@ -8,6 +8,7 @@
     "archives": "node scripts/archive-all.mjs",
     "build": "npm run archives && tsc -b --noCheck && vite build",
     "build:demo": "node scripts/build-demo.mjs",
+    "backup": "node scripts/backup.mjs",
     "preview:demo": "npm run build:demo && vite preview --outDir dist-demo",
     "preview": "node scripts/preview.mjs"
   },
