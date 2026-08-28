@@ -1,0 +1,52 @@
+{
+  "_": "Committed lint baseline. Read .githooks/pre-commit.mjs before changing it: a commit fails when a STAGED file exceeds its number here, and passes otherwise. The hook lowers a number automatically when a file improves; it never raises one. Raising a number by hand switches the gate off for that file, and should be a deliberate, explained act.",
+  "generated": "2026-08-27",
+  "tool": "eslint 9.39.5 + typescript-eslint 8.68.0, config eslint.config.js",
+  "totals": {
+    "errors": 12,
+    "warnings": 15,
+    "filesWithFindings": 10
+  },
+  "files": {
+    ".githooks/pre-commit.mjs": {
+      "errors": 1,
+      "warnings": 0
+    },
+    "src/components/ErrorBoundary.tsx": {
+      "errors": 1,
+      "warnings": 0
+    },
+    "src/components/board/ProjectDialog.tsx": {
+      "errors": 0,
+      "warnings": 3
+    },
+    "src/components/board/Workboard.tsx": {
+      "errors": 8,
+      "warnings": 4
+    },
+    "src/components/board/shared.tsx": {
+      "errors": 0,
+      "warnings": 1
+    },
+    "src/components/ui/pickers.tsx": {
+      "errors": 0,
+      "warnings": 4
+    },
+    "src/components/ui/sidebar.tsx": {
+      "errors": 0,
+      "warnings": 1
+    },
+    "src/components/ui/toast.tsx": {
+      "errors": 0,
+      "warnings": 1
+    },
+    "src/lib/store.ts": {
+      "errors": 0,
+      "warnings": 1
+    },
+    "src/scenes/DashboardScene.tsx": {
+      "errors": 2,
+      "warnings": 0
+    }
+  }
+}

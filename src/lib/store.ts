@@ -160,7 +160,7 @@ export function humanError(err: unknown, fallback: string): string {
   if (/failed to fetch|networkerror|network request failed|load failed/i.test(raw)) {
     return 'No connection to the server, so that change was not saved.'
   }
-  if (/row-level security|permission denied|not authori[sz]ed|JWT|token is expired/i.test(raw)) {
+  if (/row-level security|permission denied|not authori[sz]ed|\bJWT\b|token is expired/i.test(raw)) {
     return 'Your session has expired, or that is not yours to change. Sign out and back in.'
   }
   return SAFE_MESSAGES.has(raw) ? raw : fallback
