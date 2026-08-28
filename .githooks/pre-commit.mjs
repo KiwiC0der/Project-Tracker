@@ -57,6 +57,77 @@ const run = (bin, args) =>
 const staged = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
   .toString().split('\n').map((s) => s.trim()).filter(Boolean)
 
+/* ============================================================================
+   SECRET GATE — runs FIRST, and deliberately before `lintable` is computed.
+
+   `lintable` drops anything under dist/, and the hook exits early when nothing
+   lintable is staged. A commit consisting solely of a built tree would
+   therefore have sailed straight through — which is not hypothetical: that is
+   exactly how a `dist-verify/` tree carrying the live anon key reached a public
+   tag. The check that would have caught it has to run before the filter that
+   would have hidden it.
+
+   Milliseconds, so it costs nothing to put ahead of the type-check.
+
+   GitHub's own secret scanning is enabled on this repo WITH push protection,
+   and it cannot see this project's one emitted secret: Supabase is not a
+   scanning partner, anon keys are not a supported pattern, and there is no
+   generic JWT detector. So this is not a second opinion — for this secret
+   class it is the only reader, which is why it is hand-rolled rather than a
+   shell-out that could silently skip when a binary is missing.
+   ========================================================================== */
+/* Text files only. A staged PNG is not a credential and reading it as UTF-8
+   wastes the time budget. Build output is gitignored, but `git add -f` is not
+   hypothetical: committing a dist-verify/ tree is exactly how the live anon
+   key reached a public tag in v2.6.0. */
+const SECRET_PATTERNS = [
+  [/eyJhbGciOiJIUzI1NiIs/, 'a Supabase anon/JWT key (HS256 JWT header)'],
+  [/https:\/\/[a-z0-9]{20}\.supabase\.co/i, 'a live Supabase project ref'],
+  [/-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/, 'a private key'],
+  [/postgres(?:ql)?:\/\/[^\s:'"]+:[^\s@'"]+@/, 'a Postgres URL with a password'],
+]
+
+/* The two files that must contain these patterns as literals in order to look
+   for them. Without this the gate blocks anyone editing the scanner, which is
+   the fastest possible way to get the gate deleted. Verified: these are the
+   ONLY false positives across all 72 tracked files — the allowlist is two
+   entries and must stay that short. Never add a file here to make a commit go
+   through; unstage the secret instead. */
+const SECRET_SCANNER_FILES = new Set([
+  'scripts/lib/credential-scan.mjs',
+  '.githooks/pre-commit.mjs',
+])
+
+const secretHits = []
+for (const file of staged) {
+  if (SECRET_SCANNER_FILES.has(file)) continue
+  if (/\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|mp4|webm|zip|pdf)$/i.test(file)) continue
+  // Read the STAGED blob, not the working tree — they can differ, and it is
+  // the staged bytes that are about to become a public commit.
+  const blob = spawnSync('git', ['show', `:${file}`], {
+    encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+  })
+  if (blob.status !== 0 || !blob.stdout) continue
+  for (const [re, what] of SECRET_PATTERNS) {
+    if (re.test(blob.stdout)) secretHits.push(`${file} — ${what}`)
+  }
+}
+
+if (secretHits.length) {
+  console.error('\npre-commit REFUSED — a credential is staged:\n')
+  for (const h of secretHits) console.error(`  ${h}`)
+  console.error(`
+This repository is PUBLIC. A commit is not undone by a later deletion: an
+already-pushed secret stays reachable through tags and forks, and rotation —
+not a revert, not a rebase — is the only thing that invalidates it.
+
+  Unstage it:      git restore --staged <file>
+  Built output?    it belongs in .gitignore, never in a commit
+  Already pushed?  rotate the key first, then worry about the history
+`)
+  process.exit(1)
+}
+
 const lintable = staged.filter((f) => /\.(ts|tsx|mjs|js)$/.test(f) && !f.startsWith('dist'))
 if (!lintable.length) process.exit(0)
 
