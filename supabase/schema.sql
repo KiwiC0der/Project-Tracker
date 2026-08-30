@@ -61,6 +61,28 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- Backfill for accounts that predate the username column.
+--
+-- `handle_new_user` is a trigger, and a trigger only fires on new rows — so
+-- adding `profiles.username` by ALTER left every existing account NULL, and
+-- the column was unusable by anything that came after. Measured 2026-08-30:
+-- 4 of 5 rows null, the one populated row being the only account created since
+-- the column existed.
+--
+-- Idempotent by the `where username is null` guard rather than by ON CONFLICT:
+-- re-running must not overwrite a username someone has since changed.
+--
+-- The fallback order is copied from handle_new_user deliberately. If the two
+-- ever disagree, a backfilled account and a fresh one would carry different
+-- usernames for the same input, which is worse than either rule alone.
+update public.profiles p
+   set username = coalesce(
+         nullif(trim(u.raw_user_meta_data->>'username'), ''),
+         nullif(split_part(coalesce(u.email, ''), '@', 1), ''))
+  from auth.users u
+ where u.id = p.id
+   and p.username is null;
+
 -- ----------------------------------------------------------------------------
 -- 2. PROJECTS
 -- ----------------------------------------------------------------------------
@@ -170,6 +192,14 @@ create trigger tasks_touch before update on public.tasks
 --      into one too. Verify with supabase/tests/rls-adversarial.sql, which
 --      attacks the boundary rather than reading it — reading it is what let the
 --      two drift apart in the first place.
+-- NOT DEFINED HERE, but present on Supabase-hosted projects: an event trigger
+-- `rls_auto_enable` that turns RLS on for any new table created in `public`.
+-- It is owned by `supabase_admin` and provided by the platform, so this file
+-- cannot create it — and must not pretend to. It is recorded here because a
+-- database rebuilt from this file ALONE would not have that safety net, and
+-- the difference only shows up the day someone adds a table and forgets the
+-- `alter table ... enable row level security` line below.
+
 alter table public.profiles enable row level security;
 alter table public.projects enable row level security;
 alter table public.tasks    enable row level security;
@@ -266,8 +296,27 @@ create policy "tasks_delete_own" on public.tasks
 -- two places at once. This index makes the lookup cheap; making it UNIQUE is a
 -- separate decision, because a unique index would FAIL to apply if any
 -- duplicate already exists, and that must be checked before it is imposed.
-create index if not exists profiles_username_lower_idx
-  on public.profiles (lower(username));
+-- UNIQUE, as of 2026-08-30. It was created non-unique because a unique index
+-- fails to apply if a duplicate already exists, and whether one did had not
+-- been checked. It has since been checked — 0 duplicates across 5 rows, after
+-- the backfill above filled the 4 legacy nulls — so the constraint can now be
+-- imposed rather than hoped for.
+--
+-- Partial, because NULL is not the same claim as a taken name: `unique` treats
+-- multiple NULLs as distinct anyway, but the predicate says so out loud and
+-- keeps the index off rows it can never help.
+--
+-- This LOCALISES an invariant that was previously enforced by accident. Before
+-- it, two people could not share a username only because auth.users.email is
+-- unique and every username is mapped onto a synthesized address — an
+-- invariant maintained in a different table, by a different mechanism, for a
+-- different reason. Anything that ever writes profiles.username directly, or
+-- any future auth path that does not go through the synthesized address, would
+-- have silently broken it.
+drop index if exists public.profiles_username_lower_idx;
+create unique index if not exists profiles_username_lower_key
+  on public.profiles (lower(username))
+  where username is not null;
 
 -- ----------------------------------------------------------------------------
 -- 6. Starter content for brand-new accounts
